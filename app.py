@@ -8,143 +8,122 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.title("🧬 BioProtein Studio")
+st.subheader("Professional Protein Bioinformatics Analysis Platform")
 
-def load_css():
-    try:
-        with open(
-            "assets/style.css",
-            "r",
-            encoding="utf-8",
-        ) as css_file:
-            st.markdown(
-                f"<style>{css_file.read()}</style>",
-                unsafe_allow_html=True,
-            )
-    except FileNotFoundError:
-        pass
-
-
-load_css()
-
-
-st.markdown(
-    """
-    <div class="hero-card">
-        <div class="hero-icon">🧬</div>
-        <h1>BioProtein Studio</h1>
-        <h3>Professional Protein Bioinformatics Analysis Platform</h3>
-        <p>
-            Analyze protein sequences, calculate physicochemical
-            properties, generate publication-quality figures,
-            perform statistical analysis, and export complete reports.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
+st.write(
+    "Analyze protein sequences, calculate physicochemical properties, "
+    "generate publication-quality figures, perform statistical analysis, "
+    "and export complete research reports."
 )
 
+st.divider()
 
-st.markdown("## Core Capabilities")
+st.header("Core Capabilities")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.markdown(
-        """
-        <div class="feature-card">
-            <h3>🧪 Protein Analysis</h3>
-            <p>
-                Analyze raw and multi-FASTA protein sequences,
-                including sequence validation and ambiguous-residue
-                handling.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.subheader("🧪 Protein Analysis")
+    st.write(
+        "Analyze raw and multi-FASTA protein sequences with sequence "
+        "validation and ambiguous-residue handling."
     )
 
 with col2:
-    st.markdown(
-        """
-        <div class="feature-card">
-            <h3>📊 Publication Figures</h3>
-            <p>
-                Generate bar plots, boxplots, heatmaps,
-                scatterplots, and vector-quality figures for
-                scientific publications.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.subheader("📊 Publication Figures")
+    st.write(
+        "Generate bar charts, boxplots, heatmaps, scatterplots, PCA, "
+        "radar plots, and vector-quality figures."
     )
 
 with col3:
-    st.markdown(
-        """
-        <div class="feature-card">
-            <h3>📄 Research Reports</h3>
-            <p>
-                Export CSV files, Excel workbooks, statistical
-                summaries, automatic results paragraphs, and
-                manuscript-ready captions.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.subheader("📄 Research Reports")
+    st.write(
+        "Export physicochemical results, statistics, figure data, "
+        "automatic interpretations, and Excel reports."
     )
 
+st.divider()
 
-st.markdown("## Analysis Workflow")
+st.header("Analysis Workflow")
 
 st.markdown(
     """
-    1. Open **Protein Analysis** from the sidebar.
-    2. Paste or upload one or multiple protein sequences.
-    3. Select ambiguous-residue handling mode.
-    4. Run physicochemical and statistical analysis.
-    5. Open **Publication Figures** to inspect figures.
-    6. Download reports and publication-ready outputs.
-    """
+1. Open **Protein Analysis** from the sidebar.
+2. Paste or upload one or multiple protein sequences.
+3. Select sequence-validation and ambiguous-residue options.
+4. Run physicochemical and statistical analysis.
+5. Generate publication-quality figures.
+6. Download CSV, Excel, PNG, SVG, PDF, or TIFF outputs.
+"""
 )
 
+st.divider()
 
-st.markdown("## Software Information")
+st.header("Software Information")
 
 info1, info2, info3 = st.columns(3)
 
-info1.metric(
-    "Current Version",
-    "4.0 Development",
-)
-
-info2.metric(
-    "Analysis Engine",
-    "Biopython",
-)
-
-info3.metric(
-    "Interface",
-    "Streamlit",
-)
-
+info1.metric("Current Version", "4.2")
+info2.metric("Analysis Engine", "Biopython")
+info3.metric("Interface", "Streamlit")
 
 st.info(
-    "BioProtein Studio is currently under active development. "
-    "Results involving removed ambiguous amino-acid residues "
-    "should be interpreted as approximate."
+    "For publication work, use Strict Protein Mode and verify any "
+    "ambiguous residues from the original sequence database."
 )
 
+st.divider()
 
-st.markdown(
-    """
-    <div class="developer-card">
-        <h3>Developed by Muhammad Hammad</h3>
-        <p>
-            Department of Horticulture<br>
-            University of the Punjab, Lahore<br>
-            © 2026 Muhammad Hammad
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
+developer_col, supervisor_col = st.columns(2)
+
+with developer_col:
+    st.subheader("👨‍💻 Developer")
+    st.markdown(
+        """
+### Muhammad Hammad
+
+Department of Horticulture  
+University of the Punjab, Lahore, Pakistan  
+
+**Email:** dr.hammadse@gmail.com
+"""
+    )
+
+with supervisor_col:
+    st.subheader("🎓 Academic Supervisor")
+    st.markdown(
+        """
+### Dr. Muhammad Shafiq
+
+Associate Professor  
+Department of Horticulture  
+University of the Punjab, Lahore, Pakistan  
+
+**Email:** shafiq.iags@pu.edu.pk
+"""
+    )
+
+st.divider()
+
+link1, link2 = st.columns(2)
+
+with link1:
+    st.link_button(
+        "🌐 Open Live App",
+        "https://bioprotein-studio-hammad.streamlit.app/",
+        use_container_width=True,
+    )
+
+with link2:
+    st.link_button(
+        "💻 View GitHub Repository",
+        "https://github.com/ha7246834-cloud/BioProtein-Studio",
+        use_container_width=True,
+    )
+
+st.caption(
+    "BioProtein Studio v4.2 — Developed by Muhammad Hammad "
+    "under the supervision of Dr. Muhammad Shafiq — © 2026"
 )
