@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+outputs/
+.env
+.streamlit/secrets.toml
+app_v2_backup.py
+app_v3_before_modular.py
+app_v3_working_backup.py
+app_v3_final_backup.py

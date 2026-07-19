@@ -1,0 +1,59 @@
+.hero-card {
+    text-align: center;
+    padding: 2.5rem 2rem;
+    border-radius: 18px;
+    background: linear-gradient(
+        135deg,
+        rgba(24, 119, 97, 0.12),
+        rgba(60, 140, 200, 0.10)
+    );
+    border: 1px solid rgba(60, 120, 140, 0.25);
+    margin-bottom: 2rem;
+}
+
+.hero-card h1 {
+    font-size: 3.2rem;
+    margin-bottom: 0.3rem;
+}
+
+.hero-card h3 {
+    font-weight: 500;
+    margin-top: 0;
+}
+
+.hero-card p {
+    max-width: 850px;
+    margin: 1rem auto 0 auto;
+    font-size: 1.08rem;
+    line-height: 1.7;
+}
+
+.hero-icon {
+    font-size: 4rem;
+}
+
+.feature-card {
+    padding: 1.4rem;
+    min-height: 210px;
+    border-radius: 14px;
+    border: 1px solid rgba(100, 120, 140, 0.22);
+    background: rgba(245, 248, 250, 0.75);
+    margin-bottom: 1rem;
+}
+
+.feature-card h3 {
+    margin-top: 0;
+}
+
+.feature-card p {
+    line-height: 1.65;
+}
+
+.developer-card {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    text-align: center;
+    border-radius: 14px;
+    border-top: 3px solid #187761;
+    background: rgba(24, 119, 97, 0.07);
+}
