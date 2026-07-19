@@ -12,6 +12,12 @@ from figures.publication_plots import (
     create_gene_wise_panel,
 )
 from figures.scatterplots import create_scatterplot
+from figures.advanced_plots import (
+    create_amino_acid_heatmap,
+    create_pca_plot,
+    create_radar_plot,
+    create_violin_panel,
+)
 from modules.export_tools import (
     close_figure,
     create_figure_exports,
@@ -529,6 +535,10 @@ if properties_df is not None and not properties_df.empty:
                 "Normalized property heatmap",
                 "Correlation heatmap",
                 "Scatterplot studio",
+                "PCA plot",
+                "Radar plot",
+                "Amino-acid composition heatmap",
+                "Violin plot panel",
             ]
 
         figure_option = st.selectbox(
@@ -728,6 +738,76 @@ if properties_df is not None and not properties_df.empty:
                     figure,
                     f"scatter_{y_column}_vs_{x_column}",
                 )
+
+
+        elif figure_option == "PCA plot":
+            figure, explained_variance = create_pca_plot(
+                properties_df
+            )
+
+            st.caption(
+                f"PC1 explains {explained_variance[0]:.1f}% and "
+                f"PC2 explains {explained_variance[1]:.1f}% "
+                "of the standardized physicochemical variation."
+            )
+
+            show_figure_with_downloads(
+                figure,
+                "physicochemical_pca",
+            )
+
+        elif figure_option == "Radar plot":
+            radar_properties = [
+                "Theoretical_pI",
+                "Instability_Index",
+                "Aliphatic_Index",
+                "GRAVY",
+                "Aromaticity",
+                "Charge_Difference",
+            ]
+
+            selected_radar_proteins = st.multiselect(
+                "Select up to five proteins",
+                options=properties_df["Protein_ID"].tolist(),
+                default=properties_df["Protein_ID"].tolist()[:3],
+                max_selections=5,
+            )
+
+            if not selected_radar_proteins:
+                st.info(
+                    "Select at least one protein for the radar plot."
+                )
+            else:
+                figure = create_radar_plot(
+                    properties_df,
+                    selected_radar_proteins,
+                    radar_properties,
+                )
+
+                show_figure_with_downloads(
+                    figure,
+                    "physicochemical_radar_plot",
+                )
+
+        elif figure_option == "Amino-acid composition heatmap":
+            figure = create_amino_acid_heatmap(
+                amino_df
+            )
+
+            show_figure_with_downloads(
+                figure,
+                "amino_acid_composition_heatmap",
+            )
+
+        elif figure_option == "Violin plot panel":
+            figure = create_violin_panel(
+                properties_df
+            )
+
+            show_figure_with_downloads(
+                figure,
+                "physicochemical_violin_panel",
+            )
 
     if show_amino_acids:
         st.header("9. Amino-acid composition")
