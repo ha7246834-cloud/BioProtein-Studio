@@ -1,5 +1,7 @@
 import streamlit as st
 
+# Deployment trigger: BioProtein Studio v5.5 Research Release
+
 st.set_page_config(
     page_title="BioProtein Studio",
     page_icon="🧬",
