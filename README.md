@@ -1,39 +1,92 @@
-# BioProtein Studio v5.0
+# BioProtein Studio v5.5 Research Release
 
-BioProtein Studio is a Streamlit research application for protein characterization and genome-wide gene-family analysis.
+BioProtein Studio is a Streamlit research application for protein characterization and generic multi-gene / gene-family analysis.
 
-## New in v5.0 — Gene Structure, Conserved Domains & Motifs
+## Main workflows
 
-The new module integrates the workflow often performed manually with GSDS, NCBI CD-Search, MEME Suite and TBtools.
+### Protein Analysis
+- FASTA validation and sequence QC
+- physicochemical characterization
+- statistical summaries and publication outputs
 
-### One workspace
+### Gene Structure, Domains, Motifs & Phylogeny
+The integrated module combines workflows commonly carried out separately with GSDS, NCBI CD-Search, MEME Suite, phylogeny software and TBtools.
 
-- Protein FASTA or CDS FASTA input
-- Protein sequence-integrity QC
-- CDS translation QC
-- Gene structure from matching CDS + genomic FASTA using **EMBOSS est2genome**, or an NCBI reference CDS feature when a protein accession can be resolved
-- Live **NCBI Batch CD-Search** conserved-domain analysis
-- Local **MEME Suite** protein motif discovery
-- Optional Newick-tree row ordering
-- Individual and integrated architecture figures
-- 600-DPI PNG/TIFF and vector SVG/PDF output
-- Raw tool outputs, cleaned tables, QC tables and a run manifest in one ZIP package
+Supported inputs and routes:
+- Protein FASTA or CDS FASTA
+- matching CDS + genomic FASTA via EMBOSS `est2genome`
+- GFF3/GTF or structure-table import
+- NCBI protein accession resolution
+- **Protein + Species automatic gene structure** using NCBI Datasets + miniprot + NCBI GFF reconciliation
+- optional supplied Newick tree
+- automatic phylogeny
 
-## Scientific safety design
+## Automatic gene structure
 
-BioProtein Studio does **not** infer exon–intron structure from protein sequence alone. A real genomic/CDS reference is required. If neither matching CDS/genomic sequences nor a resolvable NCBI accession is available, gene structure is reported as unavailable instead of being fabricated.
+Protein sequence alone does not contain intron boundaries, so BioProtein Studio never invents gene structure directly from protein sequence.
 
-Validation is rule-based and auditable:
+When the user supplies Protein FASTA plus a species/taxon, the application can:
+1. resolve an annotated NCBI reference assembly;
+2. cache the reference genome locally;
+3. map proteins to the genome with splice-aware `miniprot`;
+4. reconcile mapped loci against the NCBI GFF3 annotation;
+5. reconstruct CDS/genomic sequences and exon coordinates;
+6. translate the CDS back to protein for validation;
+7. flag ambiguous or low-confidence mappings as **REVIEW**.
 
-- Gene-structure spliced alignment: CDS coverage >=95% and weighted exon identity >=95% for PASS; splice information and reading frame are retained for review.
-- NCBI CDD: specific hits are prioritized; E-values and bit scores are retained; overlapping redundant footprints are reduced while raw full output is preserved.
-- MEME: motif E-value is retained; the module additionally reports family prevalence and domain overlap. Default family model is ZOOPS.
-- Duplicate FASTA IDs are rejected rather than silently overwritten.
-- Raw CDD, MEME and est2genome outputs are included in the result package for reproducibility.
+A conservative canonical one-intron rescue can recover a strongly supported missed splice, but computationally rescued structures remain **REVIEW** until annotation/manual confirmation.
+
+## Conserved domains and motifs
+
+- Domains use the real **NCBI Batch CD-Search** service.
+- Specific CDD hits are prioritized for publication display while full raw results are retained.
+- Motifs use the real **MEME Suite** executable in protein mode.
+- Default publication display shows PASS motifs; all motifs remain available for inspection.
+
+## Phylogeny
+
+Three automatic modes are available:
+- **Publication:** MAFFT + IQ-TREE + ModelFinder + SH-aLRT + ultrafast bootstrap.
+- **Fast screening:** MAFFT + FastTree.
+- **Fallback:** internal Neighbor-Joining for small families.
+
+Uploaded Newick trees are also supported and take priority when supplied.
+
+## Integrated publication figure
+
+The final family architecture can contain four aligned panels:
+
+**Phylogenetic Tree | Gene Structure | Conserved Motifs | Conserved Domains**
+
+Each biological panel keeps its appropriate coordinate system: gene structure in bp and protein motifs/domains in amino-acid coordinates.
+
+## Graph Studio
+
+v5.5 adds interactive figure optimization without changing biological results:
+- one-click publication style variants;
+- Journal Classic, Colorblind Safe, Plant & Earth, Soft Pastel and High Contrast presets;
+- manual colors for tree/support labels, validated exons, REVIEW exons, introns, motif classes and domain classes;
+- title size, gene-label size and line-width controls;
+- live previews;
+- customized PNG, SVG, PDF and TIFF export.
+
+## Reproducibility package
+
+Analysis packages can contain:
+- input FASTA files;
+- sequence and translation QC;
+- phylogeny tree, alignment, command/report/log files;
+- gene-structure coordinates and QC;
+- automatic reference metadata, mapping QC and annotation reconciliation;
+- auto-generated CDS and genomic FASTA;
+- raw miniprot GFF3;
+- raw/full CDD results and Search-ID;
+- MEME XML and complete MEME output;
+- motif/domain validation tables;
+- 600-DPI PNG/TIFF and SVG/PDF figures;
+- run manifest and methods/QC notes.
 
 ## Full installation — Linux / WSL recommended
-
-Bioconda distributes MEME Suite and EMBOSS for Linux/macOS. On Windows, run the full environment inside WSL2.
 
 ```bash
 conda env create -f environment-gdm.yml
@@ -41,33 +94,17 @@ conda activate bioprotein-studio
 streamlit run app.py
 ```
 
-## Python-only installation
+The supplied environment includes:
+- MEME Suite
+- EMBOSS
+- MAFFT
+- FastTree
+- IQ-TREE
+- miniprot
+- NCBI Datasets CLI
 
-This installs the Streamlit application and remote CDD support, but automatic MEME and spliced est2genome steps remain unavailable until their executables are installed.
+A Python-only `pip install -r requirements.txt` can run the interface and Python components, but external scientific executables are required for the full workflow.
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+## Scientific principle
 
-## Inputs for the one-click module
-
-### Best case: protein FASTA + matching CDS + genomic FASTA
-
-All three should use the same FASTA identifiers. The application validates sequence data, maps CDS to genomic DNA, runs CDD and MEME, applies QC and creates final figures.
-
-### Protein FASTA with real NCBI protein accession IDs
-
-If CDS/genomic FASTA is not supplied, the module can attempt to retrieve a linked NCBI nucleotide record and only accepts a CDS feature that matches the accession/translation. An Entrez email is required by the interface.
-
-### Protein FASTA with custom IDs only
-
-CDD and MEME can run automatically. Gene structure cannot be reconstructed scientifically from protein sequence alone, so matching CDS + genomic sequence or a valid reference accession is required.
-
-## Output package
-
-The one-click download contains input FASTA files, sequence QC, gene structure coordinates and QC, raw est2genome text, raw and non-redundant CDD hits, CDD Search-ID, MEME XML and original result ZIP, motif coordinates and QC, publication figures, `run_manifest.json`, and methods/QC notes.
-
-## Existing protein module
-
-The original physicochemical protein-analysis workflow remains available in `pages/1_Protein_Analysis.py`.
+BioProtein Studio separates **computed evidence**, **reference evidence**, and **REVIEW** results. Visual customization never changes biological coordinates, domain hits, motif calls, mappings or phylogenetic inference.
