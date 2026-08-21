@@ -1,0 +1,16 @@
+name: bioprotein-studio
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - streamlit
+  - biopython
+  - pandas
+  - numpy
+  - matplotlib
+  - openpyxl
+  - requests
+  - meme
+  - emboss
