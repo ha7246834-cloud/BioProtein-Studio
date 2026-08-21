@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re, shutil, subprocess, tempfile, time
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional, Sequence, Tuple
 import numpy as np, pandas as pd
 from Bio import Entrez, SeqIO
 from Bio.Seq import Seq
@@ -25,7 +25,8 @@ def est2genome_pair(gene:str,cds:str,genomic:str,timeout=180):
     with tempfile.TemporaryDirectory(prefix='bps_est2genome_') as td:
         td=Path(td); c=td/'cds.fa';g=td/'genomic.fa';o=td/'out.txt'
         c.write_text(f'>{gene}\n{cds}\n');g.write_text(f'>{gene}_genomic\n{genomic}\n')
-        p=subprocess.run(['est2genome','-estsequence',str(c),'-genomesequence',str(g),'-outfile',str(o),'-align','N','-auto'],capture_output=True,text=True,timeout=timeout)
+        p=subprocess.run(['est2genome','-estsequence',str(c),'-genomesequence',str(g),'-outfile',str(o),'-align','N','-auto'],
+                         capture_output=True,text=True,timeout=timeout)
         if p.returncode or not o.exists():raise RuntimeError(p.stderr.strip() or 'est2genome failed')
         raw=o.read_text(errors='replace')
     exons=[];introns=[];strand='+'
@@ -36,7 +37,8 @@ def est2genome_pair(gene:str,cds:str,genomic:str,timeout=180):
             if len(x)>=8:
                 try:score=float(x[1]);iden=float(x[2]);gs,ge=int(x[3]),int(x[4]);cs,ce=int(x[6]),int(x[7])
                 except ValueError:continue
-                exons.append(dict(gene=gene,feature='CDS',start=min(gs,ge),end=max(gs,ge),identity_pct=iden,score=score,cds_start=min(cs,ce),cds_end=max(cs,ce),strand=strand,source='EMBOSS est2genome'))
+                exons.append(dict(gene=gene,feature='CDS',start=min(gs,ge),end=max(gs,ge),identity_pct=iden,
+                                  score=score,cds_start=min(cs,ce),cds_end=max(cs,ce),strand=strand,source='EMBOSS est2genome'))
         elif re.match(r'^[+\-?]Intron\s+',s):
             x=s.split(); introns.append(x[0])
     df=pd.DataFrame(exons)
@@ -47,7 +49,9 @@ def est2genome_pair(gene:str,cds:str,genomic:str,timeout=180):
     identity=float(np.average(df.identity_pct,weights=df.cds_end-df.cds_start+1))
     canonical=100*np.mean([not x.startswith('?') for x in introns]) if introns else np.nan
     splice_ok=True if not introns else canonical>=80
-    qc=dict(gene=gene,method='EMBOSS est2genome',exons=len(df),introns=len(introns),cds_coverage_pct=round(coverage,2),weighted_identity_pct=round(identity,2),canonical_splice_pct=round(canonical,2) if not np.isnan(canonical) else np.nan,frame_multiple_of_3=len(cds.replace('-',''))%3==0,status='PASS' if coverage>=95 and identity>=95 and splice_ok else 'REVIEW')
+    qc=dict(gene=gene,method='EMBOSS est2genome',exons=len(df),introns=len(introns),cds_coverage_pct=round(coverage,2),
+            weighted_identity_pct=round(identity,2),canonical_splice_pct=round(canonical,2) if not np.isnan(canonical) else np.nan,
+            frame_multiple_of_3=len(cds.replace('-',''))%3==0,status='PASS' if coverage>=95 and identity>=95 and splice_ok else 'REVIEW')
     return df,qc,raw
 
 def gene_structure_batch(cds:Dict[str,str],genomic:Dict[str,str]):
@@ -88,7 +92,9 @@ def ncbi_structure(accession:str,email:str,api_key:Optional[str]=None,max_links=
                 a,b=(ge-pe+1,ge-ps) if strand==-1 else (ps-gs+1,pe-gs)
                 rows.append(dict(gene=acc,feature='CDS',start=a,end=b,identity_pct=100.0,strand='-' if strand==-1 else '+',source=f'NCBI {rec.id}'))
             cds=str(f.extract(rec.seq)).upper();tr=trans[0] if trans else str(Seq(cds).translate(to_stop=True));ident=_pid(prot.rstrip('*'),tr.rstrip('*'))
-            qc=dict(gene=acc,method='NCBI reference CDS feature',exons=len(rows),introns=max(0,len(rows)-1),cds_coverage_pct=100.0,weighted_identity_pct=100.0,translation_identity_pct=round(ident,2),canonical_splice_pct=np.nan,frame_multiple_of_3=len(cds)%3==0,reference_record=rec.id,status='PASS' if ident>=95 else 'REVIEW')
+            qc=dict(gene=acc,method='NCBI reference CDS feature',exons=len(rows),introns=max(0,len(rows)-1),cds_coverage_pct=100.0,
+                    weighted_identity_pct=100.0,translation_identity_pct=round(ident,2),canonical_splice_pct=np.nan,
+                    frame_multiple_of_3=len(cds)%3==0,reference_record=rec.id,status='PASS' if ident>=95 else 'REVIEW')
             bundle=dict(protein=prot,cds=cds,genomic=str(rec.seq[gs:ge]).upper(),reference_record=rec.id)
             return pd.DataFrame(rows).sort_values('start'),qc,bundle
     return None,None,None
@@ -102,3 +108,80 @@ def ncbi_structures(accessions:Sequence[str],email:str,api_key:Optional[str]=Non
         else:dfs.append(df);q.append(qc);bundles[a]=b
         time.sleep(0.12)
     return (pd.concat(dfs,ignore_index=True) if dfs else pd.DataFrame(),pd.DataFrame(q),bundles,missing)
+
+
+def parse_gene_structure_annotation(obj, valid_genes=None):
+    """Parse a simple gene-structure CSV/TSV or GFF3/GTF annotation.
+
+    Accepted tabular columns: gene, start, end, optional feature/strand.
+    GFF3/GTF exon/CDS rows are accepted when an exact gene/Parent/ID matches.
+    Imported annotations are not sequence-realigned, so QC is marked REFERENCE.
+    """
+    from .gdm_common import read_text
+    import io
+    text=read_text(obj).lstrip('\ufeff')
+    lines=[x for x in text.splitlines() if x.strip() and not x.lstrip().startswith('#')]
+    if not lines:
+        raise ValueError('Gene-structure annotation is empty.')
+    rows=[]
+    if any(len(x.split('\t'))>=9 for x in lines[:20]):
+        for line in lines:
+            x=line.split('\t')
+            if len(x)<9: continue
+            seqid,source,ftype,start,end,score,strand,phase,attrs=x[:9]
+            if ftype.lower() not in {'exon','cds'}: continue
+            try:a,b=int(start),int(end)
+            except ValueError: continue
+            amap={}
+            for token in re.split(r';\s*',attrs.strip()):
+                if '=' in token:
+                    k,v=token.split('=',1);amap[k.strip()]=v.strip().strip('"')
+                elif ' ' in token:
+                    k,v=token.split(' ',1);amap[k.strip()]=v.strip().strip('"')
+            candidates=[]
+            for k in ['gene','gene_id','Name','Parent','ID','transcript_id']:
+                if amap.get(k): candidates += [z for z in re.split(r',',amap[k]) if z]
+            candidates.append(seqid)
+            gene=None
+            if valid_genes:
+                vg={norm_id(g):g for g in valid_genes}; vv={versionless(g):g for g in valid_genes}
+                for c in candidates:
+                    c=norm_id(c)
+                    if c in vg: gene=vg[c];break
+                    if versionless(c) in vv: gene=vv[versionless(c)];break
+            else:
+                gene=norm_id(candidates[0]) if candidates else norm_id(seqid)
+            if gene:
+                rows.append(dict(gene=gene,feature='CDS' if ftype.lower()=='cds' else 'exon',start=min(a,b),end=max(a,b),strand=strand,source='Imported GFF/GTF annotation'))
+    else:
+        try:
+            df=pd.read_csv(io.StringIO(text),sep=None,engine='python')
+        except Exception as e:
+            raise ValueError(f'Could not parse gene-structure table: {e}')
+        cols={str(c).strip().lower():c for c in df.columns}
+        gc=next((cols[k] for k in ['gene','gene_id','id','sequence','seqid'] if k in cols),None)
+        sc=next((cols[k] for k in ['start','exon_start','cds_start'] if k in cols),None)
+        ec=next((cols[k] for k in ['end','exon_end','cds_end'] if k in cols),None)
+        fc=next((cols[k] for k in ['feature','type'] if k in cols),None)
+        stc=next((cols[k] for k in ['strand'] if k in cols),None)
+        if gc is None or sc is None or ec is None:
+            raise ValueError('Structure table needs gene, start and end columns.')
+        for _,r in df.iterrows():
+            try:a,b=int(float(r[sc])),int(float(r[ec]))
+            except Exception: continue
+            gene=norm_id(r[gc])
+            if valid_genes:
+                vg={norm_id(g):g for g in valid_genes}; vv={versionless(g):g for g in valid_genes}
+                gene=vg.get(gene,vv.get(versionless(gene)))
+            if not gene: continue
+            feature=str(r[fc]) if fc is not None and not pd.isna(r[fc]) else 'CDS'
+            strand=str(r[stc]) if stc is not None and not pd.isna(r[stc]) else '.'
+            rows.append(dict(gene=gene,feature=feature,start=min(a,b),end=max(a,b),strand=strand,source='Imported structure table'))
+    out=pd.DataFrame(rows)
+    if out.empty:
+        raise ValueError('No exon/CDS rows matched the supplied gene IDs.')
+    out=out.sort_values(['gene','start','end']).reset_index(drop=True)
+    q=[]
+    for g,sub in out.groupby('gene',sort=False):
+        n=len(sub); q.append(dict(gene=g,method='Imported reference annotation',exons=n,introns=max(0,n-1),cds_coverage_pct=np.nan,weighted_identity_pct=np.nan,canonical_splice_pct=np.nan,frame_multiple_of_3=np.nan,status='REFERENCE'))
+    return out,pd.DataFrame(q)
