@@ -16,11 +16,11 @@ def empty_result():
     return dict(sequence_qc=pd.DataFrame(),cds_qc=pd.DataFrame(),gene_structures=pd.DataFrame(),gene_qc=pd.DataFrame(),domains_raw=pd.DataFrame(),domains=pd.DataFrame(),domain_qc=pd.DataFrame(),motifs=pd.DataFrame(),motif_summary=pd.DataFrame(),motif_qc=pd.DataFrame(),errors=[],warnings=[],figures={},raw_est={},ncbi_bundles={})
 def validation_summary(r):
     rows=[]
-    if not r['gene_qc'].empty:rows.append(dict(analysis='Gene structure',criterion='CDS coverage ≥95% and identity ≥95%; splice/frame reviewed',PASS=int((r.gene_qc.status=='PASS').sum()),REVIEW=int((r.gene_qc.status!='PASS').sum())))
+    if not r['gene_qc'].empty:rows.append(dict(analysis='Gene structure',criterion='CDS coverage ≥95% and identity ≥95%; splice/frame reviewed',PASS=int((r['gene_qc'].status=='PASS').sum()),REVIEW=int((r['gene_qc'].status!='PASS').sum())))
     if not r['domain_qc'].empty:
-        p=r.domain_qc.scientific_status.str.startswith('PASS',na=False);rows.append(dict(analysis='CDD domains',criterion='Specific hits prioritized; E≤1e-5 strong; raw full output retained',PASS=int(p.sum()),REVIEW=int((~p).sum())))
+        p=r['domain_qc'].scientific_status.str.startswith('PASS',na=False);rows.append(dict(analysis='CDD domains',criterion='Specific hits prioritized; E≤1e-5 strong; raw full output retained',PASS=int(p.sum()),REVIEW=int((~p).sum())))
     if not r['motif_qc'].empty:
-        p=r.motif_qc.status=='PASS';rows.append(dict(analysis='MEME motifs',criterion='MEME E<0.05 + ≥50% family prevalence for PASS',PASS=int(p.sum()),REVIEW=int((~p).sum())))
+        p=r['motif_qc'].status=='PASS';rows.append(dict(analysis='MEME motifs',criterion='MEME E<0.05 + ≥50% family prevalence for PASS',PASS=int(p.sum()),REVIEW=int((~p).sum())))
     return pd.DataFrame(rows)
 def package(r,protein_txt,cds_txt,gen_txt,params):
     files={'inputs/proteins.fasta':protein_txt,'METHODS_AND_QC.txt':'Gene structure: NCBI reference CDS feature or EMBOSS est2genome.\nDomains: NCBI Batch CD-Search full mode.\nMotifs: MEME Suite protein mode.\nPASS/REVIEW rules are visible in the app and must be biologically reviewed.\n'}
@@ -30,14 +30,14 @@ def package(r,protein_txt,cds_txt,gen_txt,params):
         d=r.get(k)
         if isinstance(d,pd.DataFrame) and not d.empty:files[n]=d.to_csv(index=False)
     for g,t in r.get('raw_est',{}).items():files[f'raw/est2genome/{g}.txt']=t
-    if r.get('cdd_raw'):files['raw/cdd_output.txt']=r.cdd_raw
-    if r.get('cdd_rid'):files['raw/cdd_search_id.txt']=r.cdd_rid
-    if r.get('meme_xml'):files['raw/meme.xml']=r.meme_xml
-    if r.get('meme_zip'):files['raw/meme_complete_output.zip']=r.meme_zip
+    if r.get('cdd_raw'):files['raw/cdd_output.txt']=r['cdd_raw']
+    if r.get('cdd_rid'):files['raw/cdd_search_id.txt']=r['cdd_rid']
+    if r.get('meme_xml'):files['raw/meme.xml']=r['meme_xml']
+    if r.get('meme_zip'):files['raw/meme_complete_output.zip']=r['meme_zip']
     for g,b in r.get('ncbi_bundles',{}).items():
         files[f'reference/{g}.cds.fasta']=f'>{g}\n{b["cds"]}\n';files[f'reference/{g}.genomic.fasta']=f'>{g}|{b["reference_record"]}\n{b["genomic"]}\n'
     for n,b in r.get('figures',{}).items():files['figures/'+n]=b
-    files['run_manifest.json']=json.dumps(dict(software='BioProtein Studio',module_version='5.0',python=platform.python_version(),parameters=params,warnings=r.errors+r.warnings),indent=2)
+    files['run_manifest.json']=json.dumps(dict(software='BioProtein Studio',module_version='5.0',python=platform.python_version(),parameters=params,warnings=r['errors']+r['warnings']),indent=2)
     return zip_files(files)
 
 c1,c2,c3=st.columns(3);c1.metric('MEME local','Ready' if meme_ready() else 'Not installed');c2.metric('EMBOSS est2genome','Ready' if est2genome_ready() else 'Not installed');c3.metric('CDD','NCBI remote')
