@@ -23,8 +23,32 @@ def read_text(obj)->str:
         v=obj.getvalue(); return v.decode('utf-8','replace') if isinstance(v,bytes) else str(v)
     return str(obj)
 
+def _clean_fasta_text(obj)->str:
+    """Normalize common FASTA exports before strict sequence parsing.
+
+    Accepts UTF-8 BOMs, blank lines, free-text preambles before the first
+    FASTA record, and comment lines beginning with #, !, or ;. Sequence
+    content itself is still validated later.
+    """
+    text=read_text(obj).replace('\ufeff','').replace('\r\n','\n').replace('\r','\n')
+    if not text.strip(): return ''
+    cleaned=[]; started=False
+    for raw in text.split('\n'):
+        line=raw.strip()
+        if not line: continue
+        if not started:
+            if line.startswith('>'):
+                started=True; cleaned.append(line)
+            else:
+                continue
+            continue
+        if line.startswith(('#','!',';')):
+            continue
+        cleaned.append(line)
+    return '\n'.join(cleaned).strip()
+
 def parse_fasta(obj, alphabet='auto')->Dict[str,str]:
-    text=read_text(obj).strip()
+    text=_clean_fasta_text(obj)
     if not text: return {}
     out={}
     for r in SeqIO.parse(io.StringIO(text),'fasta'):
@@ -35,8 +59,9 @@ def parse_fasta(obj, alphabet='auto')->Dict[str,str]:
         if allowed is not None:
             bad=sorted(set(seq)-allowed)
             if bad: raise ValueError(f"{rid}: invalid characters: {','.join(bad)}")
+        if not seq: raise ValueError(f'{rid}: empty FASTA sequence.')
         out[rid]=seq
-    if not out: raise ValueError('No FASTA records detected.')
+    if not out: raise ValueError('No FASTA records detected. Make sure at least one record starts with >.')
     return out
 
 def fasta_text(records:Dict[str,str], width=70)->str:
@@ -47,7 +72,7 @@ def fasta_text(records:Dict[str,str], width=70)->str:
     return '\n'.join(lines)+'\n'
 
 def protein_qc(records:Dict[str,str])->pd.DataFrame:
-    rows=[]; standard=set('ACDEFGHIKLMNPQRSTVWY'); amb=set('BXZJUO')
+    rows=[]; amb=set('BXZJUO')
     for rid,seq in records.items():
         seq=seq.replace('-','').upper(); terminal=seq.endswith('*'); body=seq[:-1] if terminal else seq
         internal=body.count('*'); namb=sum(x in amb for x in body); pct=100*namb/max(1,len(body))
