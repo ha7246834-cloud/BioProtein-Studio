@@ -1,3 +1,4 @@
 mafft
 fasttree
 iqtree
+emboss
