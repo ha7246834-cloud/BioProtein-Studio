@@ -101,6 +101,7 @@ def select_reference_assembly(taxon: str, assembly_accession: str = '', api_key:
     if api_key:
         common += ['--api-key', api_key]
 
+    # Prefer an NCBI reference genome if one exists; otherwise rank annotated assemblies.
     try:
         recs = _flatten_records(_run(common + ['--reference'], timeout=180))
     except Exception:
@@ -130,6 +131,7 @@ def _assembly_summary(rec: dict, requested_taxon: str = '') -> dict:
 
 
 def _find_reference_files(root: Path):
+    # NCBI Datasets genome packages place files under ncbi_dataset/data/<accession>/.
     all_files = [p for p in root.rglob('*') if p.is_file()]
     genome_candidates = []
     for p in all_files:
@@ -258,6 +260,7 @@ def parse_miniprot_gff(text: str, proteins: Dict[str, str]):
     if mdf.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+    # Some miniprot builds place Target only on mRNA. Back-fill CDS gene names from Parent.
     if not cdf.empty:
         id_to_gene = dict(zip(mdf.alignment_id, mdf.gene))
         cdf.loc[cdf.gene.eq(''), 'gene'] = cdf.loc[cdf.gene.eq(''), 'alignment_id'].map(id_to_gene).fillna('')
@@ -312,10 +315,12 @@ def _protein_coverage(query: str, translated: str) -> float:
 
 
 def _sequence_index(genome_fasta: str):
+    # SeqIO.index avoids loading an entire reference genome into RAM.
     return SeqIO.index(genome_fasta, 'fasta')
 
 
 def _gff_attrs_any(text: str):
+    """Parse GFF3 key=value and a minimal GTF key "value" attribute syntax."""
     out = _attrs(text)
     if out:
         return out
@@ -333,6 +338,7 @@ def _overlap_len(a1, a2, b1, b2):
 
 
 def _annotation_cds_candidates(gff_path: str, map_qc: pd.DataFrame, pad: int = 5000):
+    """Stream an NCBI GFF3 once and retain CDS features near mapped loci."""
     if not gff_path or not Path(gff_path).exists() or map_qc is None or map_qc.empty:
         return pd.DataFrame()
     windows = {}
@@ -427,6 +433,10 @@ def _annotation_reconcile_gene(gene: str, protein: str, mq: pd.Series, ann: pd.D
 
 
 def _canonical_one_intron_rescue(protein: str, genomic_oriented: str, max_intron: int = 5000):
+    """Conservative rescue for a single canonical GT-AG intron when annotation cannot confirm it.
+
+    This is never promoted to publication PASS by itself; it is returned as REVIEW evidence.
+    """
     seq = str(genomic_oriented or '').upper()
     q = (protein or '').rstrip('*').upper()
     if len(seq) < 30 or not q or len(seq) > 50000:
@@ -441,6 +451,7 @@ def _canonical_one_intron_rescue(protein: str, genomic_oriented: str, max_intron
             if intron_len < 20 or intron_len > max_intron:
                 continue
             spliced = seq[:d] + seq[a:]
+            # A complete CDS may include or omit the terminal stop codon.
             if len(spliced) % 3 != 0:
                 continue
             if abs(len(spliced) - expected) > max(90, int(expected * 0.15)) and abs(len(spliced) - (expected + 3)) > max(90, int(expected * 0.15)):
@@ -486,6 +497,7 @@ def build_structures_from_mapping(proteins: Dict[str, str], genome_fasta: str, g
     mdf, cdf, map_qc = parse_miniprot_gff(gff_text, proteins)
     if map_qc.empty:
         raise RuntimeError('miniprot produced no parseable mappings.')
+    # Clamp a miniprot Target-derived coverage at 100%; terminal stop coordinates can otherwise yield 100.x%.
     if 'protein_coverage_pct' in map_qc.columns:
         map_qc['protein_coverage_pct'] = pd.to_numeric(map_qc['protein_coverage_pct'], errors='coerce').clip(upper=100.0)
     ann = _annotation_cds_candidates(annotation_gff_path, map_qc) if annotation_gff_path else pd.DataFrame()
@@ -516,6 +528,7 @@ def build_structures_from_mapping(proteins: Dict[str, str], genome_fasta: str, g
             if strand == '-':
                 miniprot_genomic = miniprot_genomic.reverse_complement()
 
+            # First reconstruct the raw miniprot CDS so we can decide whether annotation improves it.
             raw_cds, raw_translated, raw_ordered = _extract_cds_from_segments(record, sub, strand)
             raw_trans_ident = _protein_identity(proteins.get(gene, ''), raw_translated)
             raw_cov = _protein_coverage(proteins.get(gene, ''), raw_translated)
@@ -529,6 +542,8 @@ def build_structures_from_mapping(proteins: Dict[str, str], genome_fasta: str, g
             annotation_overlap = np.nan
             computational_rescue = False
 
+            # Reconcile against the reference annotation. This is especially important when miniprot
+            # aligns through a short intron as one low-identity CDS block.
             recon = _annotation_reconcile_gene(gene, proteins.get(gene, ''), mq, ann, record)
             if recon is not None and (
                 raw_trans_ident < 95 or len(raw_ordered) == 1 or recon['translation_identity_pct'] >= raw_trans_ident - 0.25
@@ -557,6 +572,7 @@ def build_structures_from_mapping(proteins: Dict[str, str], genome_fasta: str, g
                     chosen_source = 'canonical one-intron rescue'
                     chosen_cds = rescue['cds']
                     chosen_translated = rescue['translated']
+                    # Relative, transcript-oriented segments; these are appropriate for structure plotting.
                     L = len(str(miniprot_genomic))
                     d, a = int(rescue['donor0']), int(rescue['acceptor0'])
                     chosen_segments = pd.DataFrame([
@@ -575,6 +591,8 @@ def build_structures_from_mapping(proteins: Dict[str, str], genome_fasta: str, g
                         'decision': 'COMPUTATIONAL_RESCUE_REVIEW',
                     })
 
+            # Build relative exon/CDS positions. NCBI/miniprot genomic segments are converted to
+            # transcript-oriented coordinates; rescue segments are already relative.
             rows_for_gene = []
             if computational_rescue:
                 for _, r in chosen_segments.iterrows():

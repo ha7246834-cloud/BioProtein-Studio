@@ -27,8 +27,9 @@ def _clean_fasta_text(obj)->str:
     """Normalize common FASTA exports before strict sequence parsing.
 
     Accepts UTF-8 BOMs, blank lines, free-text preambles before the first
-    FASTA record, and comment lines beginning with #, !, or ;. Sequence
-    content itself is still validated later.
+    FASTA record, and comment lines beginning with #, !, or ;.  Sequence
+    content itself is still validated later, so this does not weaken the
+    biological alphabet checks.
     """
     text=read_text(obj).replace('\ufeff','').replace('\r\n','\n').replace('\r','\n')
     if not text.strip(): return ''
@@ -40,6 +41,7 @@ def _clean_fasta_text(obj)->str:
             if line.startswith('>'):
                 started=True; cleaned.append(line)
             else:
+                # Ignore comments/notes exported before the first FASTA record.
                 continue
             continue
         if line.startswith(('#','!',';')):
@@ -72,7 +74,7 @@ def fasta_text(records:Dict[str,str], width=70)->str:
     return '\n'.join(lines)+'\n'
 
 def protein_qc(records:Dict[str,str])->pd.DataFrame:
-    rows=[]; amb=set('BXZJUO')
+    rows=[]; standard=set('ACDEFGHIKLMNPQRSTVWY'); amb=set('BXZJUO')
     for rid,seq in records.items():
         seq=seq.replace('-','').upper(); terminal=seq.endswith('*'); body=seq[:-1] if terminal else seq
         internal=body.count('*'); namb=sum(x in amb for x in body); pct=100*namb/max(1,len(body))

@@ -124,6 +124,7 @@ def parse_gene_structure_annotation(obj, valid_genes=None):
     if not lines:
         raise ValueError('Gene-structure annotation is empty.')
     rows=[]
+    # GFF3/GTF route
     if any(len(x.split('\t'))>=9 for x in lines[:20]):
         for line in lines:
             x=line.split('\t')

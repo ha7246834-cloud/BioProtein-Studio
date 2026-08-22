@@ -1,7 +1,5 @@
 import streamlit as st
 
-# Deployment trigger: BioProtein Studio v5.5 Research Release (compatibility sync)
-
 st.set_page_config(
     page_title="BioProtein Studio",
     page_icon="🧬",
@@ -64,8 +62,8 @@ st.warning(
 st.divider()
 st.header("Software Information")
 info1, info2, info3 = st.columns(3)
-info1.metric("Current Version", "5.5 Research Release")
-info2.metric("Core Engines", "Biopython • miniprot • NCBI Datasets • MAFFT/FastTree/IQ-TREE • CDD • MEME • EMBOSS")
+info1.metric("Current Version", "5.4 experimental")
+info2.metric("Core Engines", "Biopython • miniprot • NCBI Datasets • MAFFT/FastTree • CDD • MEME • EMBOSS")
 info3.metric("Interface", "Streamlit")
 
 st.info(
@@ -117,6 +115,6 @@ with link2:
     )
 
 st.caption(
-    "BioProtein Studio v5.5 Research Release — Developed by Muhammad Hammad "
+    "BioProtein Studio v5.5 experimental — Developed by Muhammad Hammad "
     "under the supervision of Dr. Muhammad Shafiq — © 2026"
 )

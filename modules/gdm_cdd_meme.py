@@ -29,13 +29,16 @@ def parse_cdd(obj):
         x += ['']*(11-len(x)); query=x[0].strip(); gene=query.split(' - ',1)[1].strip() if ' - ' in query else query
         try:s,e=int(float(x[3])),int(float(x[4]));ev=float(x[5]);bits=float(x[6])
         except ValueError:continue
-        rows.append(dict(gene=norm_id(re.sub(r'\(Warning:.*$','',gene).strip()),query=query,hit_type=x[1].strip().lower(),pssm_id=x[2].strip(),start=min(s,e),end=max(s,e),evalue=ev,bitscore=bits,accession=x[7].strip(),domain=x[8].strip(),incomplete=x[9].strip(),superfamily=x[10].strip(),confidence=cdd_confidence(x[1],ev)))
+        rows.append(dict(gene=norm_id(re.sub(r'\(Warning:.*$','',gene).strip()),query=query,hit_type=x[1].strip().lower(),pssm_id=x[2].strip(),
+                         start=min(s,e),end=max(s,e),evalue=ev,bitscore=bits,accession=x[7].strip(),domain=x[8].strip(),
+                         incomplete=x[9].strip(),superfamily=x[10].strip(),confidence=cdd_confidence(x[1],ev)))
     return pd.DataFrame(rows)
 
 def run_cdd(proteins,evalue=0.01,timeout=240):
     if not proteins:raise ValueError('Protein FASTA required for CDD.')
     if len(proteins)>1000:raise ValueError('Split jobs larger than 1000 protein sequences.')
-    data=dict(queries=fasta_text(proteins),db='cdd',smode='auto',useid1='true',compbasedadj='1',filter='false',evalue=str(evalue),maxhit='500',tdata='hits',dmode='full',cddefl='true')
+    data=dict(queries=fasta_text(proteins),db='cdd',smode='auto',useid1='true',compbasedadj='1',filter='false',
+              evalue=str(evalue),maxhit='500',tdata='hits',dmode='full',cddefl='true')
     h={'User-Agent':'BioProtein-Studio/5.0 research software'}
     r=requests.post(CDD_URL,data=data,timeout=60,headers=h);r.raise_for_status();rid=_rid(r.text)
     if not rid:raise RuntimeError('NCBI CDD did not return a Search-ID.')
@@ -69,7 +72,9 @@ def collapse_domains(df):
 def domain_qc(df):
     if df.empty:return pd.DataFrame()
     o=df.copy();o['length_aa']=o.end-o.start+1
-    o['scientific_status']=np.select([o.hit_type.str.contains('specific',case=False,na=False)&~o.hit_type.str.contains('non',case=False,na=False),o.evalue<=1e-5,o.evalue<=1e-3,o.evalue<=1e-2],['PASS: high-confidence specific hit','PASS: strong E-value','SUPPORTED','REVIEW: near default threshold'],default='REVIEW: weak')
+    o['scientific_status']=np.select([
+        o.hit_type.str.contains('specific',case=False,na=False)&~o.hit_type.str.contains('non',case=False,na=False),o.evalue<=1e-5,o.evalue<=1e-3,o.evalue<=1e-2],
+        ['PASS: high-confidence specific hit','PASS: strong E-value','SUPPORTED','REVIEW: near default threshold'],default='REVIEW: weak')
     return o
 
 def meme_ready():return shutil.which('meme') is not None
@@ -84,7 +89,8 @@ def parse_meme_xml(obj):
         n+=1;mid=e.attrib.get('id') or f'motif_{n}';ev=e.attrib.get('e_value',e.attrib.get('evalue','nan'))
         try:ev=float(ev)
         except:ev=np.nan
-        m=dict(motif=f'Motif {n}',motif_id=mid,consensus=e.attrib.get('name') or e.attrib.get('alt') or '',width=int(float(e.attrib.get('width',0) or 0)),sites=int(float(e.attrib.get('sites',0) or 0)),evalue=ev)
+        m=dict(motif=f'Motif {n}',motif_id=mid,consensus=e.attrib.get('name') or e.attrib.get('alt') or '',
+               width=int(float(e.attrib.get('width',0) or 0)),sites=int(float(e.attrib.get('sites',0) or 0)),evalue=ev)
         meta[mid]=m;summ.append(m.copy())
     rows=[]
     for me in [e for e in root.iter() if tag(e)=='motif']:
@@ -94,7 +100,8 @@ def parse_meme_xml(obj):
             sid=e.attrib.get('sequence_id');pos=e.attrib.get('position')
             if sid is None or pos is None:continue
             p=float(e.attrib.get('pvalue','nan'));start=int(float(pos))+1
-            rows.append(dict(gene=names.get(sid,norm_id(sid)),motif=m.get('motif','Motif'),motif_id=me.attrib.get('id'),consensus=m.get('consensus',''),start=start,end=start+w-1,width=w,site_pvalue=p,motif_evalue=m.get('evalue',np.nan)))
+            rows.append(dict(gene=names.get(sid,norm_id(sid)),motif=m.get('motif','Motif'),motif_id=me.attrib.get('id'),
+                             consensus=m.get('consensus',''),start=start,end=start+w-1,width=w,site_pvalue=p,motif_evalue=m.get('evalue',np.nan)))
     return pd.DataFrame(rows),pd.DataFrame(summ)
 
 def _zip_dir(path):
@@ -131,5 +138,6 @@ def motif_qc(sites,summary,nseq,domains=None):
             if vals:overlap=float(np.mean(vals))
         ev=float(m.evalue) if not pd.isna(m.evalue) else np.nan
         status='PASS' if not pd.isna(ev) and ev<0.05 and prev>=50 else 'REVIEW'
-        rows.append(dict(motif=m.motif,consensus=m.consensus,width=m.width,meme_evalue=ev,genes_with_motif=ng,prevalence_pct=round(prev,2),mean_domain_overlap_pct=round(overlap,2) if not pd.isna(overlap) else np.nan,status=status))
+        rows.append(dict(motif=m.motif,consensus=m.consensus,width=m.width,meme_evalue=ev,genes_with_motif=ng,
+                         prevalence_pct=round(prev,2),mean_domain_overlap_pct=round(overlap,2) if not pd.isna(overlap) else np.nan,status=status))
     return pd.DataFrame(rows)

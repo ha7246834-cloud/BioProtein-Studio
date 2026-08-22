@@ -18,4 +18,3 @@ dependencies:
   - fasttree
   - miniprot
   - ncbi-datasets-cli
-  - iqtree
