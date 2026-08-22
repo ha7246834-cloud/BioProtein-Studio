@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+VENDOR="$(CDPATH= cd -- "$HERE/.." && pwd)"
+
+CORE="$VENDOR/meme-5.5.9/meme-core"
+RUNTIME="/tmp/bps_meme_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+mkdir -p \
+  "$RUNTIME/bin" \
+  "$RUNTIME/libexec/meme-5.5.9" \
+  "$RUNTIME/share/meme-5.5.9"
+
+cp -f "$VENDOR/meme-5.5.9/prior30.plib" \
+      "$RUNTIME/share/meme-5.5.9/prior30.plib"
+
+cp -f "$VENDOR/meme-5.5.9/template.eps" \
+      "$RUNTIME/share/meme-5.5.9/template.eps"
+
+# BioProtein Studio consumes MEME XML directly.
+# HTML conversion is not required for motif discovery/results.
+cat > "$RUNTIME/libexec/meme-5.5.9/meme_xml_to_html" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod 755 "$RUNTIME/libexec/meme-5.5.9/meme_xml_to_html"
+
+GS="$(command -v gs 2>/dev/null || command -v true)"
+ln -sf "$GS" "$RUNTIME/bin/gs"
+
+exec "$CORE" "$@"
