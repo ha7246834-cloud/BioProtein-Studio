@@ -1,7 +1,0 @@
-emboss
-mafft
-fasttree
-iqtree
-build-essential
-zlib1g-dev
-ca-certificates
