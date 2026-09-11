@@ -1,0 +1,36 @@
+name: Apply CDD MEME cloud UX patch
+
+on:
+  push:
+    branches:
+      - fix/large-family-cdd-meme
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/large-family-cdd-meme
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python tools/patch_cdd_meme_ui.py
+      - name: Syntax check
+        run: python -m py_compile pages/2_Gene_Structure_Domain_Motif.py modules/gdm_cdd_meme.py
+      - name: Commit patched page
+        run: |
+          if git diff --quiet -- pages/2_Gene_Structure_Domain_Motif.py; then
+            echo 'No page changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pages/2_Gene_Structure_Domain_Motif.py
+          git commit -m 'Surface CDD batching and MEME cloud guard in UI'
+          git push origin HEAD:fix/large-family-cdd-meme
