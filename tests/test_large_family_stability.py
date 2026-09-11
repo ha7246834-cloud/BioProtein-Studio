@@ -95,9 +95,16 @@ class LargeFamilyUITests(unittest.TestCase):
         self.assertNotIn("fig_bytes_now = {fmt: fig_bytes(fig, fmt, 600)", self.page)
         self.assertIn("Figure to display", self.page)
 
-    def test_tiff_is_opt_in(self):
-        self.assertIn("Prepare TIFF download (slower)", self.page)
-        self.assertNotIn("for fmt in ['png', 'svg', 'pdf', 'tiff']", self.page)
+    def test_export_is_single_format_and_on_demand(self):
+        self.assertIn("Figure download format", self.page)
+        self.assertIn("Prepare selected figure download", self.page)
+        self.assertNotIn("svg_bytes = fig_bytes", self.page)
+        self.assertNotIn("pdf_bytes = fig_bytes", self.page)
+        self.assertNotIn("png_bytes = fig_bytes", self.page)
+
+    def test_cloud_skips_duplicate_local_autosave(self):
+        self.assertIn("if not Path('/mount/src').exists():", self.page)
+        self.assertIn("Streamlit Community Cloud uses ephemeral storage", self.page)
 
     def test_safe_iqtree_thread_default_is_visible(self):
         self.assertIn("['2', '4', '8', 'AUTO']", self.page)
