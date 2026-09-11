@@ -18,6 +18,15 @@ from Bio.Seq import Seq
 from .gdm_common import fasta_text, norm_id
 
 
+def _is_shared_cloud() -> bool:
+    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
+
+
+def _safe_miniprot_threads(threads: int) -> int:
+    requested = max(1, int(threads))
+    return min(requested, 2) if _is_shared_cloud() else requested
+
+
 def datasets_ready() -> bool:
     return shutil.which('datasets') is not None
 
@@ -705,12 +714,14 @@ def auto_resolve_gene_structure(
         td = Path(td)
         protein_fa = td / 'queries.faa'
         protein_fa.write_text(fasta_text(proteins))
+        safe_threads = _safe_miniprot_threads(threads)
         cmd = [
-            'miniprot', '-I', '-t', str(max(1, int(threads))), '--gff-only',
+            'miniprot', '-I', '-t', str(safe_threads), '--gff-only',
             '--outn=2', '--outs=0.85', '--outc=0.50',
             ref['genome_fasta'], str(protein_fa)
         ]
-        gff = _run(cmd, timeout=timeout)
+        effective_timeout = min(int(timeout), 1800) if _is_shared_cloud() else int(timeout)
+        gff = _run(cmd, timeout=effective_timeout)
     structures, qc, bundles, map_qc, mrna_hits, cds_hits, reconciliation = build_structures_from_mapping(
         proteins, ref['genome_fasta'], gff, ref.get('gff3', '')
     )

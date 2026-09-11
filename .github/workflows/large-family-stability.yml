@@ -6,9 +6,12 @@ on:
       - 'modules/gdm_phylogeny.py'
       - 'modules/gdm_plot.py'
       - 'modules/gdm_cdd_meme.py'
+      - 'modules/gdm_reference.py'
+      - 'modules/gdm_structure.py'
       - 'pages/2_Gene_Structure_Domain_Motif.py'
       - 'tests/test_large_family_stability.py'
       - 'tests/test_cdd_meme_cloud_stability.py'
+      - 'tests/test_gene_structure_performance.py'
       - '.github/workflows/large-family-stability.yml'
 
 jobs:
@@ -31,6 +34,8 @@ jobs:
             modules/gdm_phylogeny.py \
             modules/gdm_plot.py \
             modules/gdm_cdd_meme.py \
+            modules/gdm_reference.py \
+            modules/gdm_structure.py \
             pages/2_Gene_Structure_Domain_Motif.py
       - name: Run stability tests
         env:
@@ -38,4 +43,5 @@ jobs:
         run: |
           python -m unittest -v \
             tests.test_large_family_stability \
-            tests.test_cdd_meme_cloud_stability
+            tests.test_cdd_meme_cloud_stability \
+            tests.test_gene_structure_performance
