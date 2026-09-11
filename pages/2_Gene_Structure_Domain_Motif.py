@@ -311,6 +311,11 @@ with auto:
 
         prog.progress(42, text='Conserved domains...')
         if do_cdd:
+            if len(proteins) > 200:
+                r['warnings'].append(
+                    f'CDD large-family mode: all {len(proteins)} proteins are analysed in transparent NCBI batches; '
+                    'no sequences are subsampled.'
+                )
             try:
                 r['domains_raw'], r['cdd_rid'], r['cdd_raw'] = run_cdd(proteins, float(cdd_e))
                 r['domains'] = collapse_domains(r['domains_raw'])
@@ -328,7 +333,11 @@ with auto:
                 r['meme_zip'] = m['zip']
                 r['logos'] = m['logos']
             except Exception as e:
-                r['errors'].append('MEME: ' + str(e))
+                msg = str(e)
+                if msg.startswith('CLOUD_RESOURCE_LIMIT:'):
+                    r['warnings'].append('MEME cloud safety: ' + msg.split(':', 1)[1].strip())
+                else:
+                    r['errors'].append('MEME: ' + msg)
 
         r['motif_qc'] = motif_qc(r['motifs'], r['motif_summary'], len(proteins), r['domains'])
         order = choose_order(
