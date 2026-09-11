@@ -142,7 +142,7 @@ def _run_cdd_batch(proteins, evalue, deadline):
     return parse_cdd(r.text), rid, r.text
 
 
-def run_cdd(proteins, evalue=0.01, timeout=360, batch_size=CDD_BATCH_SIZE):
+def run_cdd(proteins, evalue=0.01, timeout=360, batch_size=CDD_BATCH_SIZE, progress=None):
     """Run NCBI Batch CD-Search with transparent batching for large families.
 
     All proteins are analysed. Jobs are split only to keep individual NCBI
@@ -163,6 +163,11 @@ def run_cdd(proteins, evalue=0.01, timeout=360, batch_size=CDD_BATCH_SIZE):
     raw_parts = []
 
     for i, batch in enumerate(batches, 1):
+        if callable(progress):
+            try:
+                progress(i - 1, len(batches), f'Submitting NCBI CDD batch {i}/{len(batches)} ({len(batch)} proteins)')
+            except Exception:
+                pass
         if time.time() >= deadline:
             raise TimeoutError(
                 f'CDD analysis reached its {int(timeout)} s overall limit before batch {i}/{len(batches)}. '
@@ -175,6 +180,11 @@ def run_cdd(proteins, evalue=0.01, timeout=360, batch_size=CDD_BATCH_SIZE):
         raw_parts.append(
             f'# BioProtein Studio CDD batch {i}/{len(batches)}; sequences={len(batch)}; Search-ID={rid}\n{raw}'
         )
+        if callable(progress):
+            try:
+                progress(i, len(batches), f'Completed NCBI CDD batch {i}/{len(batches)}')
+            except Exception:
+                pass
         if i < len(batches):
             time.sleep(1.0)
 
