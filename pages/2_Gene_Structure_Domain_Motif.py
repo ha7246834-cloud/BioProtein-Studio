@@ -229,10 +229,26 @@ with auto:
         r['sequence_qc'] = protein_qc(proteins)
         r['tree_text'] = tree_text
         protein_txt = fasta_text(proteins)
+        family_nseq = len(proteins)
+        family_residues = sum(len(str(x).replace('-', '').replace('*', '')) for x in proteins.values())
         if (r['sequence_qc'].status == 'REVIEW').any():
             r['warnings'].append('Sequence-integrity QC flagged one or more proteins.')
 
-        prog = st.progress(5, text='Phylogeny...')
+        if uploaded_tree_text:
+            phylo_progress_text = f'Phylogeny: validating uploaded Newick for {family_nseq} proteins...'
+        elif not auto_tree:
+            phylo_progress_text = 'Phylogeny: automatic inference disabled.'
+        elif phylo_mode == 'auto' and (family_nseq > 60 or family_residues > 40000):
+            phylo_progress_text = (
+                f'Phylogeny: large family ({family_nseq} proteins, {family_residues:,} aa) → '
+                'MAFFT + FastTree cloud-safe screening...'
+            )
+        elif phylo_mode == 'publication':
+            phylo_progress_text = f'Phylogeny: MAFFT + IQ-TREE publication inference for {family_nseq} proteins...'
+        else:
+            phylo_progress_text = f'Phylogeny: analysing {family_nseq} proteins...'
+
+        prog = st.progress(5, text=phylo_progress_text)
         if uploaded_tree_text:
             tree_text = uploaded_tree_text
             r['phylogeny_method'] = 'Uploaded Newick'
@@ -258,7 +274,13 @@ with auto:
                 tree_text = ''
         r['tree_text'] = tree_text
 
-        prog.progress(15, text='Gene structure...')
+        if auto_reference and (reference_taxon.strip() or reference_accession.strip()) and not (structure_up or (cds and genomic)):
+            gene_progress_text = f'Gene structure: mapping {family_nseq} proteins to the selected NCBI reference...'
+        elif cds and genomic:
+            gene_progress_text = f'Gene structure: validating matching CDS/genomic inputs for {family_nseq} proteins...'
+        else:
+            gene_progress_text = 'Gene structure: resolving available reference evidence...'
+        prog.progress(15, text=gene_progress_text)
         structure_txt = file_text(structure_up) if structure_up else ''
         if structure_txt:
             try:
@@ -309,7 +331,8 @@ with auto:
             else:
                 r['warnings'].append('Gene structure unavailable for this run. No validated genomic reference mapping was produced.')
 
-        prog.progress(42, text='Conserved domains...')
+        cdd_batches = max(1, (family_nseq + 199) // 200)
+        prog.progress(42, text=f'Conserved domains: NCBI CDD for {family_nseq} proteins ({cdd_batches} batch(es))...')
         if do_cdd:
             if len(proteins) > 200:
                 r['warnings'].append(
@@ -317,13 +340,22 @@ with auto:
                     'no sequences are subsampled.'
                 )
             try:
-                r['domains_raw'], r['cdd_rid'], r['cdd_raw'] = run_cdd(proteins, float(cdd_e))
+                def _cdd_progress(done, total, message):
+                    pct = 42 + int(24 * done / max(1, total))
+                    prog.progress(min(66, pct), text=f'CDD {done}/{total}: {message}')
+
+                r['domains_raw'], r['cdd_rid'], r['cdd_raw'] = run_cdd(
+                    proteins, float(cdd_e), progress=_cdd_progress
+                )
                 r['domains'] = collapse_domains(r['domains_raw'])
                 r['domain_qc'] = domain_qc(r['domains'])
             except Exception as e:
                 r['errors'].append('CDD: ' + str(e))
 
-        prog.progress(68, text='MEME motifs...')
+        prog.progress(
+            68,
+            text=f'MEME motifs: {family_nseq} proteins, up to {int(nm)} motifs (cloud safety limits apply)...'
+        )
         if do_meme:
             try:
                 m = run_meme(proteins, int(nm), int(minw), int(maxw), model)

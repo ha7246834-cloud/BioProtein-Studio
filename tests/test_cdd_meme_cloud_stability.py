@@ -14,6 +14,7 @@ def proteins(n, length=300):
 class CDDBatchingTests(unittest.TestCase):
     def test_large_family_is_batched_without_subsampling(self):
         calls = []
+        progress_events = []
 
         def fake_batch(batch, evalue, deadline):
             calls.append(list(batch))
@@ -36,8 +37,14 @@ class CDDBatchingTests(unittest.TestCase):
             return frame, f'RID{len(calls)}', f'raw-{len(calls)}'
 
         family = proteins(450, 120)
-        with patch.object(cm, '_run_cdd_batch', side_effect=fake_batch):
-            df, rid_text, raw = cm.run_cdd(family, batch_size=200, timeout=60)
+        with patch.object(cm, '_run_cdd_batch', side_effect=fake_batch), \
+             patch.object(cm.time, 'sleep', return_value=None):
+            df, rid_text, raw = cm.run_cdd(
+                family,
+                batch_size=200,
+                timeout=60,
+                progress=lambda done, total, message: progress_events.append((done, total, message)),
+            )
 
         self.assertEqual([len(x) for x in calls], [200, 200, 50])
         flattened = [gene for batch in calls for gene in batch]
@@ -45,6 +52,24 @@ class CDDBatchingTests(unittest.TestCase):
         self.assertEqual(len(df), 3)
         self.assertEqual(rid_text, 'batch1:RID1;batch2:RID2;batch3:RID3')
         self.assertIn('batch 3/3', raw)
+        self.assertEqual(progress_events[0][0:2], (0, 3))
+        self.assertEqual(progress_events[-1][0:2], (3, 3))
+        self.assertIn('Completed NCBI CDD batch 3/3', progress_events[-1][2])
+
+    def test_bad_progress_callback_does_not_break_science(self):
+        frame = pd.DataFrame([{
+            'gene': 'Gene0000', 'query': 'Gene0000', 'hit_type': 'specific',
+            'pssm_id': '1', 'start': 1, 'end': 10, 'evalue': 1e-8,
+            'bitscore': 50.0, 'accession': 'cd00001', 'domain': 'TEST',
+            'incomplete': '', 'superfamily': '', 'confidence': 'HIGH',
+        }])
+        with patch.object(cm, '_run_cdd_batch', return_value=(frame, 'RID1', 'raw')):
+            df, rid, _ = cm.run_cdd(
+                proteins(3, 40), timeout=60,
+                progress=lambda *args: (_ for _ in ()).throw(RuntimeError('UI callback failed')),
+            )
+        self.assertEqual(rid, 'RID1')
+        self.assertEqual(len(df), 1)
 
     def test_more_than_supported_max_is_rejected_clearly(self):
         with self.assertRaisesRegex(ValueError, '1000'):
