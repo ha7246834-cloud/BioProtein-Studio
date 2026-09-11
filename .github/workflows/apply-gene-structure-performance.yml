@@ -1,0 +1,36 @@
+name: Apply gene-structure performance patch
+
+on:
+  push:
+    branches:
+      - fix/cloud-gene-structure-performance
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/cloud-gene-structure-performance
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python tools/patch_gene_structure_performance.py
+      - name: Syntax check
+        run: python -m py_compile modules/gdm_reference.py modules/gdm_structure.py
+      - name: Commit patched modules
+        run: |
+          if git diff --quiet -- modules/gdm_reference.py modules/gdm_structure.py; then
+            echo 'No module changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add modules/gdm_reference.py modules/gdm_structure.py
+          git commit -m 'Reduce cloud gene-structure CPU overhead'
+          git push origin HEAD:fix/cloud-gene-structure-performance
