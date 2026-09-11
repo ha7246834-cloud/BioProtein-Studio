@@ -1,13 +1,11 @@
 name: Large family stability
 
 on:
-  push:
-    branches:
-      - fix/large-family-cloud-stability
   pull_request:
     paths:
       - 'modules/gdm_phylogeny.py'
       - 'modules/gdm_plot.py'
+      - 'pages/2_Gene_Structure_Domain_Motif.py'
       - 'tests/test_large_family_stability.py'
       - '.github/workflows/large-family-stability.yml'
 
@@ -27,7 +25,10 @@ jobs:
           pip install -r requirements.txt
       - name: Syntax check
         run: |
-          python -m py_compile modules/gdm_phylogeny.py modules/gdm_plot.py
+          python -m py_compile \
+            modules/gdm_phylogeny.py \
+            modules/gdm_plot.py \
+            pages/2_Gene_Structure_Domain_Motif.py
       - name: Run stability tests
         env:
           MPLBACKEND: Agg
