@@ -12,6 +12,7 @@ on:
       - 'tests/test_large_family_stability.py'
       - 'tests/test_cdd_meme_cloud_stability.py'
       - 'tests/test_gene_structure_performance.py'
+      - 'tests/test_cloud_preflight_ui.py'
       - '.github/workflows/large-family-stability.yml'
 
 jobs:
@@ -44,4 +45,5 @@ jobs:
           python -m unittest -v \
             tests.test_large_family_stability \
             tests.test_cdd_meme_cloud_stability \
-            tests.test_gene_structure_performance
+            tests.test_gene_structure_performance \
+            tests.test_cloud_preflight_ui
