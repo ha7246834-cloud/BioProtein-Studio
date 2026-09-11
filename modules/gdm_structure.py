@@ -21,7 +21,13 @@ def _exact(gene,cds,genomic):
     return df,qc,'Exact contiguous match; no intron inferred.'
 
 def est2genome_pair(gene:str,cds:str,genomic:str,timeout=180):
-    if not est2genome_ready():return _exact(gene,cds,genomic)
+    # Fast exact-contiguous route is scientifically definitive for intronless
+    # CDS and avoids launching one EMBOSS process per gene unnecessarily.
+    try:
+        return _exact(gene, cds, genomic)
+    except RuntimeError:
+        if not est2genome_ready():
+            raise
     with tempfile.TemporaryDirectory(prefix='bps_est2genome_') as td:
         td=Path(td); c=td/'cds.fa';g=td/'genomic.fa';o=td/'out.txt'
         c.write_text(f'>{gene}\n{cds}\n');g.write_text(f'>{gene}_genomic\n{genomic}\n')
