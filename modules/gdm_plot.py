@@ -1,16 +1,44 @@
 import io
 from io import StringIO
+
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 import pandas as pd
 from Bio import Phylo
+
 from .gdm_style import style_from_preset, assign_colors
 
 
-def fig_bytes(fig, fmt='png', dpi=600):
+MAX_RASTER_PIXELS = 6_000_000
+
+
+def _family_height(n, per_row=.62, base=1.8, minimum=3.8, maximum=28.0):
+    """Bound figure height so large families do not allocate giant canvases."""
+    n = max(1, int(n))
+    return min(float(maximum), max(float(minimum), per_row * n + base))
+
+
+def fig_bytes(fig, fmt='png', dpi=600, max_pixels=MAX_RASTER_PIXELS):
+    """Serialize a figure with a raster-memory safety cap.
+
+    Vector SVG/PDF keep their native geometry. Raster formats automatically
+    reduce DPI when the requested canvas would exceed max_pixels.
+    """
     b = io.BytesIO()
-    fig.savefig(b, format=fmt, dpi=dpi, bbox_inches='tight')
+    fmt_l = str(fmt).lower()
+    out_dpi = int(dpi)
+    save_kwargs = {}
+
+    if fmt_l in {'png', 'tif', 'tiff', 'jpg', 'jpeg'}:
+        w, h = fig.get_size_inches()
+        area = max(float(w) * float(h), 1e-6)
+        safe_dpi = int((float(max_pixels) / area) ** 0.5)
+        out_dpi = max(90, min(out_dpi, safe_dpi))
+        if fmt_l in {'tif', 'tiff'}:
+            save_kwargs['pil_kwargs'] = {'compression': 'tiff_lzw'}
+
+    fig.savefig(b, format=fmt, dpi=out_dpi, bbox_inches='tight', **save_kwargs)
     return b.getvalue()
 
 
@@ -41,8 +69,11 @@ def gene_structure(df: pd.DataFrame, order, style=None):
     if df is None or df.empty:
         return None
     s = _S(style)
-    fig, ax = plt.subplots(figsize=(12, max(3.8, .62 * len(order) + 1.8)))
+    fig, ax = plt.subplots(figsize=(12, _family_height(len(order), .62, 1.8, 3.8, 28.0)))
     d = _ordered_subset(df, order)
+    if d.empty:
+        plt.close(fig)
+        return None
     xmin, xmax = d['start'].min(), d['end'].max()
     for y, g in enumerate(order):
         sub = d[d.gene == g]
@@ -70,7 +101,7 @@ def gene_structure(df: pd.DataFrame, order, style=None):
 
 def missing_structure_figure(order, style=None):
     s = _S(style)
-    fig, ax = plt.subplots(figsize=(12,max(3.8,.62*len(order)+1.8)))
+    fig, ax = plt.subplots(figsize=(12, _family_height(len(order), .62, 1.8, 3.8, 28.0)))
     ax.text(.5,.55,'Gene structure unavailable',ha='center',va='center',fontsize=s['title_size'],weight='bold',transform=ax.transAxes)
     ax.text(.5,.45,'Provide matching CDS + genomic FASTA, NCBI-resolvable accessions, or an exon/CDS annotation table.',ha='center',va='center',fontsize=s['label_size'],transform=ax.transAxes,wrap=True)
     ax.set_yticks(range(len(order))); ax.set_yticklabels(order,fontsize=s['label_size']); ax.invert_yaxis(); ax.set_xticks([])
@@ -90,8 +121,11 @@ def _feature_color_map(df, col, s):
 def architecture(df, order, col, title, xlabel='Protein position (aa)', style=None):
     if df is None or df.empty:
         return None
-    s = _S(style); d = _ordered_subset(df, order); colors = _feature_color_map(d,col,s); mx=max(1,int(d.end.max()))
-    fig, ax = plt.subplots(figsize=(12,max(3.8,.62*len(order)+1.8)))
+    s = _S(style); d = _ordered_subset(df, order)
+    if d.empty:
+        return None
+    colors = _feature_color_map(d,col,s); mx=max(1,int(d.end.max()))
+    fig, ax = plt.subplots(figsize=(12, _family_height(len(order), .62, 1.8, 3.8, 28.0)))
     for y,g in enumerate(order):
         ax.plot([1,mx],[y,y],lw=.8,color=s['backbone_color'],zorder=1)
         for _,r in d[d.gene==g].iterrows():
@@ -160,13 +194,16 @@ def _draw_tree_axis(ax, tree_text, order, style=None):
 
 def phylogeny_figure(tree_text, order, style=None):
     if not tree_text:return None
-    fig,ax=plt.subplots(figsize=(8.5,max(4,.62*len(order)+1.6)))
+    fig,ax=plt.subplots(figsize=(8.5,_family_height(len(order), .62, 1.6, 4.0, 28.0)))
     if not _draw_tree_axis(ax,tree_text,order,style): plt.close(fig); return None
     fig.tight_layout(); return fig
 
 
 def _draw_structure_panel(ax, df, order, show_labels=False, style=None):
-    s=_S(style); d=_ordered_subset(df,order); xmin,xmax=d.start.min(),d.end.max(); pad=max(5,(xmax-xmin)*.02 if xmax>xmin else 5)
+    s=_S(style); d=_ordered_subset(df,order)
+    if d.empty:
+        ax.text(.5,.5,'No structure data for this view',ha='center',va='center',transform=ax.transAxes); ax.axis('off'); return
+    xmin,xmax=d.start.min(),d.end.max(); pad=max(5,(xmax-xmin)*.02 if xmax>xmin else 5)
     for y,g in enumerate(order):
         sub=d[d.gene==g]
         if sub.empty:continue
@@ -178,7 +215,10 @@ def _draw_structure_panel(ax, df, order, show_labels=False, style=None):
 
 
 def _draw_feature_panel(ax, df, order, col, title, show_labels=False, style=None):
-    s=_S(style); d=_ordered_subset(df,order); mx=max(1,int(d.end.max())); colors=_feature_color_map(d,col,s)
+    s=_S(style); d=_ordered_subset(df,order)
+    if d.empty:
+        ax.text(.5,.5,'No feature data for this view',ha='center',va='center',transform=ax.transAxes); ax.axis('off'); return {}
+    mx=max(1,int(d.end.max())); colors=_feature_color_map(d,col,s)
     for y,g in enumerate(order):
         ax.plot([1,mx],[y,y],lw=.8,color=s['backbone_color'],zorder=1)
         for _,r in d[d.gene==g].iterrows():
@@ -196,7 +236,7 @@ def combined(tree_text, structures, domains, motifs, order, style=None):
     if motifs is not None and not motifs.empty:panels.append('motif')
     if domains is not None and not domains.empty:panels.append('domain')
     widths=[{'tree':1.8,'structure':2.2,'motif':2.0,'domain':2.0}[p] for p in panels]
-    fig,axes=plt.subplots(1,len(panels),figsize=(5.2*len(panels),max(4.4,.70*len(order)+1.8)),gridspec_kw={'width_ratios':widths},squeeze=False);axes=axes[0]
+    fig,axes=plt.subplots(1,len(panels),figsize=(5.2*len(panels),_family_height(len(order), .70, 1.8, 4.4, 30.0)),gridspec_kw={'width_ratios':widths},squeeze=False);axes=axes[0]
     legends={};first_non_tree=True
     for i,p in enumerate(panels):
         ax=axes[i]
