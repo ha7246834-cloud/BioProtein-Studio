@@ -1,14 +1,16 @@
+from pathlib import Path
 import unittest
 
 from streamlit.testing.v1 import AppTest
 
 
-PAGE = 'pages/2_Gene_Structure_Domain_Motif.py'
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PAGE = REPO_ROOT / 'pages' / '2_Gene_Structure_Domain_Motif.py'
 
 
 class GDMStreamlitSmokeTests(unittest.TestCase):
     def test_page_renders_without_runtime_exception(self):
-        at = AppTest.from_file(PAGE, default_timeout=30)
+        at = AppTest.from_file(str(PAGE), default_timeout=30)
         at.run()
         self.assertEqual(
             len(at.exception),
@@ -17,7 +19,7 @@ class GDMStreamlitSmokeTests(unittest.TestCase):
         )
 
     def test_core_controls_are_present(self):
-        at = AppTest.from_file(PAGE, default_timeout=30)
+        at = AppTest.from_file(str(PAGE), default_timeout=30)
         at.run()
         self.assertEqual(len(at.exception), 0)
 
