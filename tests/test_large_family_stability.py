@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -77,6 +78,29 @@ class PlotMemoryTests(unittest.TestCase):
         data = fig_bytes(fig, 'tiff', 600)
         plt.close(fig)
         self.assertGreater(len(data), 100)
+
+
+class LargeFamilyUITests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.page = Path('pages/2_Gene_Structure_Domain_Motif.py').read_text()
+
+    def test_large_family_viewer_is_paginated(self):
+        self.assertIn("Large-family viewer:", self.page)
+        self.assertIn("display_order = full_order[lo:hi]", self.page)
+        self.assertIn("Sequences shown per figure", self.page)
+
+    def test_eager_all_figure_rendering_removed(self):
+        self.assertNotIn("figs = {\n            'phylogenetic_tree'", self.page)
+        self.assertNotIn("fig_bytes_now = {fmt: fig_bytes(fig, fmt, 600)", self.page)
+        self.assertIn("Figure to display", self.page)
+
+    def test_tiff_is_opt_in(self):
+        self.assertIn("Prepare TIFF download (slower)", self.page)
+        self.assertNotIn("for fmt in ['png', 'svg', 'pdf', 'tiff']", self.page)
+
+    def test_safe_iqtree_thread_default_is_visible(self):
+        self.assertIn("['2', '4', '8', 'AUTO']", self.page)
 
 
 if __name__ == '__main__':

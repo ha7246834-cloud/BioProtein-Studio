@@ -178,7 +178,7 @@ with auto:
         phylo_mode = st.selectbox(
             'Automatic tree method', ['auto', 'publication', 'fasttree', 'nj'],
             format_func=lambda x: {
-                'auto': 'Auto — IQ-TREE publication mode if installed, otherwise FastTree, then NJ fallback',
+                'auto': 'Auto — adaptive: IQ-TREE for small families, FastTree for larger families',
                 'publication': 'Publication — MAFFT + IQ-TREE + ModelFinder + SH-aLRT + ultrafast bootstrap',
                 'fasttree': 'Fast screening — MAFFT + FastTree',
                 'nj': 'Internal Neighbor-Joining — quick screening only'
@@ -190,7 +190,7 @@ with auto:
         with pc2:
             phylo_alrt = st.selectbox('SH-aLRT replicates', [1000, 2000, 5000], index=0)
         with pc3:
-            phylo_threads = st.selectbox('IQ-TREE threads', ['AUTO', '2', '4', '8'], index=0)
+            phylo_threads = st.selectbox('IQ-TREE threads', ['2', '4', '8', 'AUTO'], index=0)
         st.caption('Publication mode uses MAFFT alignment followed by IQ-TREE maximum-likelihood inference, automatic ModelFinder selection, SH-aLRT support and ultrafast bootstrap. FastTree remains a screening option.')
     s1, s2, s3, s4 = st.columns(4)
     with s1:
@@ -340,21 +340,16 @@ with auto:
         )
         r['order'] = order
 
-        prog.progress(88, text='Figures and reproducibility package...')
-        plot_domains = filter_domains(r['domains'], 'specific')
-        plot_motifs = filter_motifs(r['motifs'], r['motif_qc'], 'pass')
-        figs = {
-            'phylogenetic_tree': phylogeny_figure(tree_text, order),
-            'gene_structure': gene_structure(r['gene_structures'], order),
-            'domain_architecture': architecture(plot_domains, order, 'domain', 'Conserved Domain Architecture'),
-            'motif_architecture': architecture(plot_motifs, order, 'motif', 'Conserved Motif Architecture'),
-            'integrated_architecture': combined(tree_text, r['gene_structures'], plot_domains, plot_motifs, order)
-        }
-        for stem, fig in figs.items():
-            if fig:
-                for fmt in ['png', 'svg', 'pdf', 'tiff']:
-                    r['figures'][f'{stem}.{fmt}'] = fig_bytes(fig, fmt, 600)
-                plt.close(fig)
+        prog.progress(88, text='Preparing reproducibility package...')
+        # Figures are deliberately rendered on demand below. Generating every
+        # panel in four high-resolution formats during analysis is expensive
+        # and can exhaust shared-cloud memory for large protein families.
+        r['figures'] = {}
+        if len(order) > 60:
+            r['warnings'].append(
+                f'Large-family visualization mode enabled for {len(order)} sequences. '
+                'Figures are paginated and rendered on demand; the full tree/alignment remain downloadable.'
+            )
 
         params = dict(cdd_evalue=float(cdd_e), meme_nmotifs=int(nm), meme_min_width=int(minw), meme_max_width=int(maxw), meme_model=model, plot_domains='specific', plot_motifs='pass', tree_provided=bool(uploaded_tree_text), phylogeny_method=r.get('phylogeny_method',''), phylogeny_mode=phylo_mode, phylogeny_bootstrap=int(phylo_bootstrap), phylogeny_alrt=int(phylo_alrt), auto_phylogeny=bool(auto_tree), auto_reference=bool(auto_reference), reference_taxon=reference_taxon.strip(), reference_accession=reference_accession.strip())
         r['package'] = package(r, protein_txt, file_text(cds_up) if cds_up else (primary if mode.startswith('CDS') else ''), file_text(gen_up), tree_text, params, structure_txt)
@@ -413,18 +408,55 @@ with auto:
         dom_plot = filter_domains(r['domains'], domain_mode)
         mot_plot = filter_motifs(r['motifs'], r['motif_qc'], motif_mode)
 
+        full_order = list(r['order'])
+        n_family = len(full_order)
+        display_order = full_order
+        page_num = 1
+
+        if n_family > 60:
+            st.info(
+                f'Large-family viewer: {n_family} sequences detected. Analysis uses all sequences, '
+                'while browser figures are paginated to protect CPU and memory.'
+            )
+            pg1, pg2 = st.columns(2)
+            with pg1:
+                page_size = st.selectbox(
+                    'Sequences shown per figure', [40, 60, 100], index=1, key='gdm_page_size'
+                )
+            page_count = max(1, (n_family + page_size - 1) // page_size)
+            with pg2:
+                page_num = int(st.number_input(
+                    'Figure page', min_value=1, max_value=page_count, value=1, step=1,
+                    key='gdm_page_number'
+                ))
+            lo = (page_num - 1) * page_size
+            hi = min(n_family, lo + page_size)
+            display_order = full_order[lo:hi]
+            st.caption(
+                f'Displaying sequences {lo + 1}–{hi} of {n_family}. '
+                'Full Newick/alignment downloads still contain the complete family.'
+            )
+
         with st.expander('🎨 Graph Studio — auto styles, colors & layout', expanded=True):
             st.caption('Click Generate alternatives to preview several publication-ready color versions. Select any preset, then optionally fine-tune individual colors. All figure tabs and downloads update to the selected style.')
             if 'gdm_show_style_variants' not in st.session_state:
                 st.session_state.gdm_show_style_variants = False
-            if st.button('✨ Generate alternative color versions', key='gdm_generate_styles', width='stretch'):
+            if n_family > 60:
+                st.session_state.gdm_show_style_variants = False
+                st.caption('Alternative multi-panel previews are disabled for large families to protect cloud memory.')
+            if st.button(
+                '✨ Generate alternative color versions',
+                key='gdm_generate_styles',
+                width='stretch',
+                disabled=(n_family > 60),
+            ):
                 st.session_state.gdm_show_style_variants = True
             if st.session_state.gdm_show_style_variants:
                 pv_names = list(STYLE_PRESETS.keys())[:4]
                 pv_cols = st.columns(2)
                 for pi, pname in enumerate(pv_names):
                     with pv_cols[pi % 2]:
-                        pf = combined(r.get('tree_text',''), r['gene_structures'], dom_plot, mot_plot, r['order'], style_from_preset(pname))
+                        pf = combined(r.get('tree_text',''), r['gene_structures'], dom_plot, mot_plot, display_order, style_from_preset(pname))
                         if pf:
                             st.caption(pname)
                             st.pyplot(pf, width='stretch')
@@ -466,43 +498,100 @@ with auto:
                         with dcols[di % len(dcols)]:
                             graph_style['domain_colors'][lab] = st.color_picker(lab, default_domain[lab], key='domain_color_'+lab)
 
-        tabs = st.tabs(['Phylogeny', 'Gene Structure', 'Domains', 'Motifs', 'Integrated Figure'])
-        items = [
-            (tabs[0], phylogeny_figure(r.get('tree_text',''), r['order'], graph_style), r.get('phylogeny_qc', pd.DataFrame())),
-            (tabs[1], gene_structure(r['gene_structures'], r['order'], graph_style) if not r['gene_structures'].empty else missing_structure_figure(r['order'], graph_style), r['gene_qc']),
-            (tabs[2], architecture(dom_plot, r['order'], 'domain', 'Conserved Domain Architecture', style=graph_style), r['domain_qc']),
-            (tabs[3], architecture(mot_plot, r['order'], 'motif', 'Conserved Motif Architecture', style=graph_style), r['motif_qc']),
-            (tabs[4], combined(r.get('tree_text', ''), r['gene_structures'], dom_plot, mot_plot, r['order'], graph_style), pd.DataFrame())
-        ]
-        stems = ['phylogenetic_tree', 'gene_structure', 'domain_architecture', 'motif_architecture', 'integrated_architecture']
-        for i, (tab, fig, table) in enumerate(items):
-            with tab:
-                if fig:
-                    st.pyplot(fig)
-                    fig_bytes_now = {fmt: fig_bytes(fig, fmt, 600) for fmt in ['png', 'svg', 'pdf', 'tiff']}
-                    plt.close(fig)
-                    if not table.empty:
-                        st.dataframe(table, width='stretch', hide_index=True)
-                    for fmt in ['png', 'svg', 'pdf', 'tiff']:
-                        st.download_button(f'Download {fmt.upper()}', fig_bytes_now[fmt], f'{stems[i]}.{fmt}', key=f'{stems[i]}_{fmt}_{domain_mode}_{motif_mode}')
-                else:
-                    st.info('No result available for this analysis.')
+        st.subheader('Figure viewer')
 
-        styled_files = {}
-        styled_specs = {
-            'phylogenetic_tree': phylogeny_figure(r.get('tree_text',''), r['order'], graph_style),
-            'gene_structure': gene_structure(r['gene_structures'], r['order'], graph_style) if not r['gene_structures'].empty else missing_structure_figure(r['order'], graph_style),
-            'domain_architecture': architecture(dom_plot, r['order'], 'domain', 'Conserved Domain Architecture', style=graph_style),
-            'motif_architecture': architecture(mot_plot, r['order'], 'motif', 'Conserved Motif Architecture', style=graph_style),
-            'integrated_architecture': combined(r.get('tree_text',''), r['gene_structures'], dom_plot, mot_plot, r['order'], graph_style),
-        }
-        for stem_name, sf in styled_specs.items():
-            if sf:
-                for fmt in ['png','svg','pdf','tiff']:
-                    styled_files[f'{stem_name}.{fmt}'] = fig_bytes(sf, fmt, 600)
-                plt.close(sf)
-        styled_files['GRAPH_STYLE.json'] = json.dumps(graph_style, indent=2)
-        st.download_button('🎨 Download customized figure set', zip_files(styled_files), 'BioProtein_Studio_Custom_Figures.zip', 'application/zip', width='stretch')
+        if r.get('tree_text'):
+            td1, td2 = st.columns(2)
+            with td1:
+                st.download_button(
+                    'Download full Newick tree', r['tree_text'], 'phylogenetic_tree_full.nwk',
+                    'text/plain', width='stretch'
+                )
+            if r.get('alignment_text'):
+                with td2:
+                    st.download_button(
+                        'Download full protein alignment', r['alignment_text'], 'protein_alignment_full.fasta',
+                        'text/plain', width='stretch'
+                    )
+
+        figure_choice = st.radio(
+            'Figure to display',
+            ['Phylogeny', 'Gene Structure', 'Domains', 'Motifs', 'Integrated Figure'],
+            horizontal=True,
+            key='gdm_figure_choice',
+        )
+
+        selected_fig = None
+        selected_table = pd.DataFrame()
+        stem = 'figure'
+
+        if figure_choice == 'Phylogeny':
+            selected_fig = phylogeny_figure(r.get('tree_text', ''), display_order, graph_style)
+            selected_table = r.get('phylogeny_qc', pd.DataFrame())
+            stem = 'phylogenetic_tree'
+        elif figure_choice == 'Gene Structure':
+            selected_fig = (
+                gene_structure(r['gene_structures'], display_order, graph_style)
+                if not r['gene_structures'].empty
+                else missing_structure_figure(display_order, graph_style)
+            )
+            selected_table = r['gene_qc']
+            stem = 'gene_structure'
+        elif figure_choice == 'Domains':
+            selected_fig = architecture(
+                dom_plot, display_order, 'domain', 'Conserved Domain Architecture', style=graph_style
+            )
+            selected_table = r['domain_qc']
+            stem = 'domain_architecture'
+        elif figure_choice == 'Motifs':
+            selected_fig = architecture(
+                mot_plot, display_order, 'motif', 'Conserved Motif Architecture', style=graph_style
+            )
+            selected_table = r['motif_qc']
+            stem = 'motif_architecture'
+        elif figure_choice == 'Integrated Figure':
+            selected_fig = combined(
+                r.get('tree_text', ''), r['gene_structures'], dom_plot, mot_plot,
+                display_order, graph_style
+            )
+            stem = 'integrated_architecture'
+
+        if selected_fig:
+            st.pyplot(selected_fig, width='stretch')
+            if isinstance(selected_table, pd.DataFrame) and not selected_table.empty:
+                st.dataframe(selected_table, width='stretch', hide_index=True)
+
+            suffix = f'_page{page_num}' if n_family > 60 else ''
+            key_base = f'{stem}_{domain_mode}_{motif_mode}_{page_num}'
+
+            # Prepare only the displayed figure. SVG/PDF are ideal for publication;
+            # PNG is capped by gdm_plot.fig_bytes to avoid giant allocations.
+            svg_bytes = fig_bytes(selected_fig, 'svg', 300)
+            pdf_bytes = fig_bytes(selected_fig, 'pdf', 300)
+            png_bytes = fig_bytes(selected_fig, 'png', 220)
+
+            d1, d2, d3 = st.columns(3)
+            with d1:
+                st.download_button('Download SVG', svg_bytes, f'{stem}{suffix}.svg', 'image/svg+xml', key=key_base + '_svg', width='stretch')
+            with d2:
+                st.download_button('Download PDF', pdf_bytes, f'{stem}{suffix}.pdf', 'application/pdf', key=key_base + '_pdf', width='stretch')
+            with d3:
+                st.download_button('Download PNG', png_bytes, f'{stem}{suffix}.png', 'image/png', key=key_base + '_png', width='stretch')
+
+            if st.checkbox('Prepare TIFF download (slower)', False, key='gdm_prepare_tiff'):
+                tiff_bytes = fig_bytes(selected_fig, 'tiff', 300)
+                st.download_button(
+                    'Download TIFF', tiff_bytes, f'{stem}{suffix}.tiff', 'image/tiff',
+                    key=key_base + '_tiff'
+                )
+            plt.close(selected_fig)
+        else:
+            st.info('No result available for this figure.')
+
+        st.caption(
+            'Cloud-safe rendering: one figure is generated at a time. Large families are paginated for display, '
+            'while the complete analysis, Newick tree, and alignment remain preserved.'
+        )
 
         st.download_button('📦 Download complete analysis package', r['package'], 'BioProtein_Studio_GDM_Results_v5_5.zip', 'application/zip', type='primary', width='stretch')
         if r.get('autosave_path'):
