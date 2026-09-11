@@ -1,0 +1,35 @@
+name: Large family stability
+
+on:
+  push:
+    branches:
+      - fix/large-family-cloud-stability
+  pull_request:
+    paths:
+      - 'modules/gdm_phylogeny.py'
+      - 'modules/gdm_plot.py'
+      - 'tests/test_large_family_stability.py'
+      - '.github/workflows/large-family-stability.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Syntax check
+        run: |
+          python -m py_compile modules/gdm_phylogeny.py modules/gdm_plot.py
+      - name: Run stability tests
+        env:
+          MPLBACKEND: Agg
+        run: |
+          python -m unittest -v tests.test_large_family_stability

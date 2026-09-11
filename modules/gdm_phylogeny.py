@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -15,12 +17,22 @@ from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
 from .gdm_common import fasta_text
 
 
+AUTO_IQTREE_MAX_SEQUENCES = 60
+AUTO_IQTREE_MAX_RESIDUES = 40000
+CLOUD_PUBLICATION_MAX_SEQUENCES = 80
+CLOUD_PUBLICATION_MAX_RESIDUES = 60000
+
+
 def _which_fasttree():
     return shutil.which('FastTree') or shutil.which('fasttree') or shutil.which('fasttreeMP')
 
 
 def _which_iqtree():
     return shutil.which('iqtree3') or shutil.which('iqtree2') or shutil.which('iqtree')
+
+
+def _is_shared_cloud():
+    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
 
 
 def external_phylogeny_ready():
@@ -38,6 +50,7 @@ def phylogeny_tool_status():
         'iqtree': _which_iqtree(),
         'external_ready': external_phylogeny_ready(),
         'publication_ready': publication_phylogeny_ready(),
+        'shared_cloud': _is_shared_cloud(),
     }
 
 
@@ -48,6 +61,11 @@ def _clean_proteins(proteins: Dict[str, str]):
         if s:
             out[str(gene)] = s
     return out
+
+
+def _family_stats(proteins: Dict[str, str]):
+    cleaned = _clean_proteins(proteins)
+    return cleaned, len(cleaned), sum(len(x) for x in cleaned.values())
 
 
 def _safe_records(proteins):
@@ -85,19 +103,31 @@ def _run_mafft(proteins: Dict[str, str], td: Path, timeout=900):
     mafft = shutil.which('mafft')
     if not mafft:
         raise RuntimeError('MAFFT is not installed in the active environment.')
+
+    proteins = _clean_proteins(proteins)
     safe, mapping = _safe_records(proteins)
     fasta = td / 'proteins.faa'
     fasta.write_text(fasta_text(safe))
-    p = subprocess.run([mafft, '--auto', '--quiet', str(fasta)], capture_output=True, text=True, timeout=timeout)
+
+    cmd = [mafft, '--quiet', '--thread', '2']
+    if len(proteins) > 250:
+        # FFT-NS-1-like strategy: much safer for large families on shared CPU.
+        cmd += ['--retree', '1', '--maxiterate', '0']
+    else:
+        cmd += ['--auto']
+    cmd.append(str(fasta))
+
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if p.returncode != 0 or not p.stdout.strip():
         raise RuntimeError(p.stderr.strip() or 'MAFFT failed to produce an alignment.')
     return p.stdout, mapping
 
 
-def run_mafft_fasttree(proteins: Dict[str, str], timeout=900):
+def run_mafft_fasttree(proteins: Dict[str, str], timeout=1200):
     proteins = _clean_proteins(proteins)
     if len(proteins) < 3:
         raise ValueError('At least 3 protein sequences are recommended for phylogenetic inference.')
+
     fasttree = _which_fasttree()
     if not fasttree:
         raise RuntimeError('FastTree is not installed in the active environment.')
@@ -105,7 +135,13 @@ def run_mafft_fasttree(proteins: Dict[str, str], timeout=900):
     with tempfile.TemporaryDirectory(prefix='bps_tree_') as td0:
         td = Path(td0)
         aln_safe, mapping = _run_mafft(proteins, td, timeout=timeout)
-        p2 = subprocess.run([fasttree, '-wag', '-gamma'], input=aln_safe, capture_output=True, text=True, timeout=timeout)
+        p2 = subprocess.run(
+            [fasttree, '-wag', '-gamma'],
+            input=aln_safe,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
         if p2.returncode != 0 or '(' not in p2.stdout:
             raise RuntimeError(p2.stderr.strip() or 'FastTree failed to produce a Newick tree.')
 
@@ -123,7 +159,7 @@ def run_mafft_fasttree(proteins: Dict[str, str], timeout=900):
         'alignment_text': alignment_text,
         'method': 'MAFFT + FastTree',
         'qc': qc,
-        'warning': 'FastTree is retained as a fast screening method. Use Publication mode (IQ-TREE) for final inference when available.',
+        'warning': 'FastTree is retained as a fast screening method. Use Publication mode (IQ-TREE) for final inference when resources allow.',
         'log_text': p2.stderr or '',
     }
 
@@ -141,13 +177,26 @@ def _parse_iqtree_model(text: str):
     return 'ModelFinder best-fit model'
 
 
+def _safe_iqtree_threads(threads):
+    t = str(threads).upper()
+    if t == 'AUTO':
+        return '2' if _is_shared_cloud() else 'AUTO'
+    try:
+        return str(max(1, min(int(t), 4 if _is_shared_cloud() else 64)))
+    except Exception:
+        return '2' if _is_shared_cloud() else 'AUTO'
+
+
 def run_mafft_iqtree(proteins: Dict[str, str], bootstrap=1000, alrt=1000, threads='AUTO', timeout=7200):
     proteins = _clean_proteins(proteins)
     if len(proteins) < 3:
         raise ValueError('At least 3 protein sequences are recommended for phylogenetic inference.')
+
     iqtree = _which_iqtree()
     if not iqtree:
         raise RuntimeError('IQ-TREE is not installed in the active environment.')
+
+    threads = _safe_iqtree_threads(threads)
 
     with tempfile.TemporaryDirectory(prefix='bps_iqtree_') as td0:
         td = Path(td0)
@@ -155,7 +204,16 @@ def run_mafft_iqtree(proteins: Dict[str, str], bootstrap=1000, alrt=1000, thread
         aln = td / 'alignment.fasta'
         aln.write_text(aln_safe)
         prefix = td / 'bps_iqtree'
-        cmd = [iqtree, '-s', str(aln), '-m', 'MFP', '-B', str(int(bootstrap)), '-alrt', str(int(alrt)), '-T', str(threads), '--prefix', str(prefix), '-redo']
+        cmd = [
+            iqtree,
+            '-s', str(aln),
+            '-m', 'MFP',
+            '-B', str(int(bootstrap)),
+            '-alrt', str(int(alrt)),
+            '-T', str(threads),
+            '--prefix', str(prefix),
+            '-redo',
+        ]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         treefile = Path(str(prefix) + '.treefile')
         report = Path(str(prefix) + '.iqtree')
@@ -208,7 +266,10 @@ def run_nj_fallback(proteins: Dict[str, str], max_sequences=100):
     if n < 3:
         raise ValueError('At least 3 protein sequences are recommended for phylogenetic inference.')
     if n > max_sequences:
-        raise ValueError(f'Internal NJ fallback is limited to {max_sequences} sequences. Install MAFFT + FastTree/IQ-TREE for larger families.')
+        raise ValueError(
+            f'Internal NJ fallback is limited to {max_sequences} sequences. '
+            'Use MAFFT + FastTree/IQ-TREE for larger families.'
+        )
 
     names = list(proteins)
     aligner = PairwiseAligner()
@@ -252,12 +313,21 @@ def run_nj_fallback(proteins: Dict[str, str], max_sequences=100):
 
 
 def build_phylogeny(proteins: Dict[str, str], mode='auto', bootstrap=1000, alrt=1000, threads='AUTO'):
-    n = len(_clean_proteins(proteins))
+    proteins, n, total_residues = _family_stats(proteins)
     if n < 3:
         return {
-            'tree_text': '', 'alignment_text': '', 'method': 'Not applicable',
-            'qc': pd.DataFrame([{'method': 'Not applicable', 'sequences': n, 'model': '', 'support': '', 'status': 'REVIEW: at least 3 sequences are required for family phylogeny'}]),
-            'warning': 'Phylogeny was skipped because fewer than 3 protein sequences were supplied.', 'log_text': ''
+            'tree_text': '',
+            'alignment_text': '',
+            'method': 'Not applicable',
+            'qc': pd.DataFrame([{
+                'method': 'Not applicable',
+                'sequences': n,
+                'model': '',
+                'support': '',
+                'status': 'REVIEW: at least 3 sequences are required for family phylogeny',
+            }]),
+            'warning': 'Phylogeny was skipped because fewer than 3 protein sequences were supplied.',
+            'log_text': '',
         }
 
     aliases = {'external': 'fasttree'}
@@ -268,7 +338,22 @@ def build_phylogeny(proteins: Dict[str, str], mode='auto', bootstrap=1000, alrt=
     if mode == 'publication':
         if not publication_phylogeny_ready():
             raise RuntimeError('Publication mode requires MAFFT + IQ-TREE.')
-        return run_mafft_iqtree(proteins, bootstrap=bootstrap, alrt=alrt, threads=threads)
+        if _is_shared_cloud() and (
+            n > CLOUD_PUBLICATION_MAX_SEQUENCES
+            or total_residues > CLOUD_PUBLICATION_MAX_RESIDUES
+        ):
+            raise RuntimeError(
+                'Publication IQ-TREE mode is too resource-intensive for this family on shared Streamlit Cloud '
+                f'({n} sequences; {total_residues:,} aa). Use Auto/FastTree here, or run Publication mode '
+                'locally/HPC and upload the validated Newick tree.'
+            )
+        return run_mafft_iqtree(
+            proteins,
+            bootstrap=bootstrap,
+            alrt=alrt,
+            threads=threads,
+            timeout=3600 if _is_shared_cloud() else 7200,
+        )
 
     if mode == 'fasttree':
         if not external_phylogeny_ready():
@@ -276,8 +361,37 @@ def build_phylogeny(proteins: Dict[str, str], mode='auto', bootstrap=1000, alrt=
         return run_mafft_fasttree(proteins)
 
     if mode == 'auto':
-        if publication_phylogeny_ready():
-            return run_mafft_iqtree(proteins, bootstrap=bootstrap, alrt=alrt, threads=threads)
+        small_enough_for_iqtree = (
+            n <= AUTO_IQTREE_MAX_SEQUENCES
+            and total_residues <= AUTO_IQTREE_MAX_RESIDUES
+        )
+
+        if small_enough_for_iqtree and publication_phylogeny_ready():
+            result = run_mafft_iqtree(
+                proteins,
+                bootstrap=bootstrap,
+                alrt=alrt,
+                threads=threads,
+                timeout=1800 if _is_shared_cloud() else 7200,
+            )
+            return result
+
         if external_phylogeny_ready():
-            return run_mafft_fasttree(proteins)
+            result = run_mafft_fasttree(proteins)
+            result['warning'] = (
+                f'Large-family Auto mode selected MAFFT + FastTree for {n} sequences '
+                f'({total_residues:,} aa) to avoid CPU/memory stalls. The full alignment and Newick tree are preserved. '
+                'For final publication inference, run IQ-TREE Publication mode locally/HPC or upload a validated Newick tree.'
+            )
+            return result
+
+        if publication_phylogeny_ready():
+            return run_mafft_iqtree(
+                proteins,
+                bootstrap=bootstrap,
+                alrt=alrt,
+                threads=threads,
+                timeout=1800 if _is_shared_cloud() else 7200,
+            )
+
     return run_nj_fallback(proteins)
