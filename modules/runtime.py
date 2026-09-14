@@ -1,0 +1,309 @@
+"""Unified runtime policy, resource-sandboxed subprocess execution, and stage
+instrumentation for BioProtein Studio.
+
+Why this module exists
+----------------------
+The Gene-Structure / Domain / Motif (GDM) workflow shells out to several native
+tools (MAFFT, FastTree, IQ-TREE, MEME, EMBOSS est2genome, miniprot, NCBI
+Datasets) and performs large in-memory operations. On a shared Streamlit
+Community Cloud worker these can spike memory or CPU. When a child process
+exceeds the worker's cgroup memory limit, the Linux OOM killer terminates the
+*whole* cgroup — including the parent Streamlit process — which surfaces to the
+user as "Oh no. Error running app." with no Python traceback.
+
+The historical response was to add per-module size thresholds (e.g. a 20-protein
+MEME cap). Those are guesses: measured MEME memory for a 40-protein / 8,411-aa
+family is ~11 MB, so that particular cap defends against nothing while blocking
+legitimate science.
+
+This module replaces guesswork with two structural guarantees:
+
+1. `run_guarded()` launches every child with an enforced address-space and CPU
+   ceiling (POSIX ``setrlimit`` in a ``preexec_fn``) and its own process group.
+   A runaway child is then killed by the kernel and returns a non-zero status,
+   which we raise as a catchable :class:`ChildResourceError`. The parent worker
+   survives, upstream results are preserved, and the user sees a clean message
+   instead of a dead app.
+
+2. `stage()` records start/end, elapsed time, RSS before/after and child exit
+   status to stderr, which appears in Streamlit Cloud logs. Failures become
+   measurable instead of mysterious.
+
+Everything degrades gracefully off POSIX (e.g. the developer's Windows box):
+if ``setrlimit`` is unavailable the command still runs, just without the kernel
+ceiling, and a one-time notice is logged.
+"""
+from __future__ import annotations
+
+import contextlib
+import os
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional, Sequence
+
+try:  # POSIX-only; absent on Windows.
+    import resource as _resource
+except Exception:  # pragma: no cover - platform dependent
+    _resource = None
+
+
+# ---------------------------------------------------------------------------
+# Runtime detection — single source of truth.
+# ---------------------------------------------------------------------------
+
+# Streamlit Community Cloud clones the app under /mount/src and (historically)
+# set STREAMLIT_SHARING_MODE. BPS_FORCE_CLOUD lets operators/tests force the
+# shared-cloud profile explicitly.
+_CLOUD_MOUNT = Path('/mount/src')
+
+
+def is_shared_cloud() -> bool:
+    """True when running on a shared, resource-constrained Streamlit worker."""
+    if os.environ.get('BPS_FORCE_CLOUD') == '1':
+        return True
+    if os.environ.get('BPS_FORCE_CLOUD') == '0':
+        return False
+    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or _CLOUD_MOUNT.exists()
+
+
+def export_runtime_env() -> None:
+    """Publish the detected profile as an env var so child processes and the
+    vendored shell wrappers make the *same* decision as the Python layer.
+
+    Call this once at import of the GDM page. It never downgrades an explicit
+    operator override.
+    """
+    if 'BPS_FORCE_CLOUD' not in os.environ:
+        os.environ['BPS_SHARED_CLOUD'] = '1' if is_shared_cloud() else '0'
+
+
+# Worker memory budget (MB). Shared Streamlit Community Cloud apps run in a
+# tightly limited cgroup; we assume a conservative budget and keep child
+# ceilings below it so a child dies before the cgroup OOM killer fires. Both are
+# overridable via environment for other deployments/HPC.
+def worker_memory_budget_mb() -> int:
+    override = os.environ.get('BPS_WORKER_MEMORY_MB')
+    if override and override.isdigit():
+        return int(override)
+    return 900 if is_shared_cloud() else 8192
+
+
+def default_thread_cap() -> int:
+    """Thread ceiling for native tools; shared CPU on cloud is oversubscribed."""
+    override = os.environ.get('BPS_THREAD_CAP')
+    if override and override.isdigit():
+        return max(1, int(override))
+    return 2 if is_shared_cloud() else max(1, (os.cpu_count() or 4))
+
+
+def runtime_profile() -> dict:
+    return {
+        'shared_cloud': is_shared_cloud(),
+        'worker_memory_budget_mb': worker_memory_budget_mb(),
+        'thread_cap': default_thread_cap(),
+        'rlimit_available': _resource is not None,
+        'python': sys.version.split()[0],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Memory accounting.
+# ---------------------------------------------------------------------------
+
+def current_rss_mb() -> float:
+    """Best-effort resident set size of this process in MB (0.0 if unknown)."""
+    # /proc is cheapest and needs no dependency.
+    try:
+        with open('/proc/self/statm') as fh:
+            pages = int(fh.read().split()[1])
+        return round(pages * os.sysconf('SC_PAGE_SIZE') / 1024 / 1024, 1)
+    except Exception:
+        pass
+    if _resource is not None:
+        try:
+            maxrss = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+            # Linux reports kB, macOS bytes.
+            return round((maxrss / 1024 if maxrss > 1_000_000 else maxrss) / 1024, 1)
+        except Exception:
+            pass
+    return 0.0
+
+
+def child_memory_ceiling_mb(minimum_mb: int, headroom_mb: int = 150) -> int:
+    """Address-space ceiling for a child so parent+child stay under budget.
+
+    Returns at least ``minimum_mb`` (a tool never gets less than it needs to
+    start) but otherwise leaves ``headroom_mb`` below the worker budget for the
+    parent's own footprint.
+    """
+    budget = worker_memory_budget_mb()
+    available = int(budget - current_rss_mb() - headroom_mb)
+    return max(int(minimum_mb), available)
+
+
+# ---------------------------------------------------------------------------
+# Structured logging (stderr → Streamlit Cloud logs).
+# ---------------------------------------------------------------------------
+
+def log_event(event: str, **fields) -> None:
+    parts = [f'[bps:{event}]']
+    for key, value in fields.items():
+        parts.append(f'{key}={value}')
+    sys.stderr.write(' '.join(parts) + '\n')
+    sys.stderr.flush()
+
+
+@contextlib.contextmanager
+def stage(name: str, **context):
+    """Instrument a workflow stage: log start/end, elapsed, and RSS delta."""
+    rss0 = current_rss_mb()
+    t0 = time.time()
+    log_event('stage.start', stage=name, rss_mb=rss0, **context)
+    status = 'ok'
+    try:
+        yield
+    except BaseException as exc:  # noqa: BLE001 - we re-raise after logging
+        status = f'error:{type(exc).__name__}'
+        raise
+    finally:
+        rss1 = current_rss_mb()
+        log_event(
+            'stage.end', stage=name, status=status,
+            elapsed_s=round(time.time() - t0, 2),
+            rss_mb=rss1, rss_delta_mb=round(rss1 - rss0, 1),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Resource-sandboxed subprocess execution.
+# ---------------------------------------------------------------------------
+
+class ChildResourceError(RuntimeError):
+    """A child process was killed by the kernel/resource limits (not a normal
+    tool error). Raised so callers can present a scientific message and keep the
+    Streamlit worker alive."""
+
+
+# Signals that indicate the kernel/limits terminated the child rather than the
+# tool exiting on its own.
+_KILL_SIGNALS = {
+    getattr(signal, s, None): s
+    for s in ('SIGKILL', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGXCPU', 'SIGXFSZ')
+}
+_KILL_SIGNALS.pop(None, None)
+
+# The Go-based `datasets` binary reserves a very large virtual address space at
+# start-up, so an RLIMIT_AS ceiling makes it crash immediately. Address-space
+# limiting is therefore opt-out for such tools (CPU limit + timeout still apply).
+_NO_ADDRESS_LIMIT = {'datasets'}
+
+_DEGRADE_LOGGED = False
+
+
+@dataclass
+class RunResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    elapsed_s: float
+    peak_child_mb: Optional[float] = None
+    sandboxed: bool = False
+
+
+def _preexec(mem_bytes: int, cpu_secs: int):
+    def _apply():  # pragma: no cover - runs in the forked child
+        try:
+            os.setsid()
+        except Exception:
+            pass
+        if _resource is not None:
+            if mem_bytes:
+                try:
+                    _resource.setrlimit(_resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+                except (ValueError, OSError):
+                    pass
+            if cpu_secs:
+                try:
+                    _resource.setrlimit(_resource.RLIMIT_CPU, (cpu_secs, cpu_secs))
+                except (ValueError, OSError):
+                    pass
+    return _apply
+
+
+def run_guarded(
+    cmd: Sequence[str],
+    *,
+    mem_mb: Optional[int] = None,
+    cpu_s: Optional[int] = None,
+    timeout: Optional[int] = None,
+    input: Optional[str] = None,
+    text: bool = True,
+    cwd: Optional[str] = None,
+    tool: Optional[str] = None,
+) -> RunResult:
+    """Run ``cmd`` with an enforced memory (RLIMIT_AS) and CPU (RLIMIT_CPU)
+    ceiling in its own process group.
+
+    On POSIX a child that exceeds the ceiling is killed by the kernel; this
+    function raises :class:`ChildResourceError` in that case so the parent
+    worker survives and the caller can report a clean, scientific message.
+
+    Off POSIX (or when ``setrlimit`` is unavailable) the command still runs
+    without a kernel ceiling and ``sandboxed`` is ``False``.
+    """
+    global _DEGRADE_LOGGED
+    cmd = [str(c) for c in cmd]
+    tool = tool or os.path.basename(cmd[0])
+    apply_mem = tool not in _NO_ADDRESS_LIMIT
+    mem_bytes = int(mem_mb * 1024 * 1024) if (mem_mb and apply_mem) else 0
+
+    preexec = None
+    sandboxed = False
+    if _resource is not None and os.name == 'posix':
+        preexec = _preexec(mem_bytes, int(cpu_s) if cpu_s else 0)
+        sandboxed = True
+    elif not _DEGRADE_LOGGED:
+        _DEGRADE_LOGGED = True
+        log_event('sandbox.unavailable', reason='no-posix-resource',
+                  note='running without kernel resource ceiling')
+
+    t0 = time.time()
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=text, timeout=timeout,
+            input=input, cwd=cwd, preexec_fn=preexec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed = round(time.time() - t0, 2)
+        log_event('child.timeout', tool=tool, elapsed_s=elapsed, timeout_s=timeout)
+        raise ChildResourceError(
+            f'{tool} exceeded its {timeout}s time limit and was stopped to protect '
+            'the shared worker. Retry with a smaller input, or run this stage '
+            'locally/HPC.'
+        ) from exc
+
+    elapsed = round(time.time() - t0, 2)
+    rc = proc.returncode
+    stderr = proc.stderr or ''
+
+    if rc < 0:
+        signum = -rc
+        signame = _KILL_SIGNALS.get(signum)
+        log_event('child.killed', tool=tool, signal=signame or signum, elapsed_s=elapsed)
+        if signame:
+            raise ChildResourceError(
+                f'{tool} was terminated by the runtime ({signame}) after exceeding its '
+                'memory/CPU ceiling. No partial {tool} output is trusted. Run this '
+                'stage locally/HPC for the full-size job, or reduce the input.'
+            )
+        raise ChildResourceError(f'{tool} was terminated by signal {signum}.')
+
+    log_event('child.exit', tool=tool, returncode=rc, elapsed_s=elapsed, sandboxed=sandboxed)
+    return RunResult(
+        returncode=rc, stdout=proc.stdout or '', stderr=stderr,
+        elapsed_s=elapsed, sandboxed=sandboxed,
+    )
