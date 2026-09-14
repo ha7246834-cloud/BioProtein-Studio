@@ -20,8 +20,11 @@ from .gdm_common import fasta_text, norm_id, read_text
 CDD_URL = 'https://www.ncbi.nlm.nih.gov/Structure/bwrpsb/bwrpsb.cgi'
 CDD_BATCH_SIZE = 200
 CDD_MAX_SEQUENCES = 1000
-CLOUD_MEME_MAX_SEQUENCES = 150
-CLOUD_MEME_MAX_RESIDUES = 60000
+# Shared-Cloud MEME is deliberately conservative. A real 40-protein / 8,411-aa
+# run terminated the Streamlit worker, so larger full-family motif discovery is
+# kept local/HPC and can be imported back as MEME XML.
+CLOUD_MEME_MAX_SEQUENCES = 20
+CLOUD_MEME_MAX_RESIDUES = 5000
 
 
 def _is_shared_cloud():
