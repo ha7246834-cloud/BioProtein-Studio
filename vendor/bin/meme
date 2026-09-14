@@ -7,6 +7,31 @@ VENDOR="$(CDPATH= cd -- "$HERE/.." && pwd)"
 CORE="$VENDOR/meme-5.5.9/meme-core"
 RUNTIME="/tmp/bps_meme_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
+# Shared Streamlit Cloud has a tight process budget. A real 40-protein /
+# 8,411-aa run terminated the whole app while MEME was enabled, so the
+# vendored Cloud fallback refuses inputs above a deliberately conservative
+# envelope instead of allowing the child process to take down Streamlit.
+# Local/WSL/HPC runs are unaffected.
+if [ -n "${STREAMLIT_SHARING_MODE:-}" ] || [ -d /mount/src ]; then
+  INPUT="${1:-}"
+  if [ -f "$INPUT" ]; then
+    NSEQ="$(grep -c '^>' "$INPUT" 2>/dev/null || true)"
+    RESIDUES="$(awk '!/^>/ {gsub(/[[:space:]\-*]/, ""); n += length($0)} END {print n + 0}' "$INPUT")"
+    NSEQ="${NSEQ:-0}"
+    RESIDUES="${RESIDUES:-0}"
+    if [ "$NSEQ" -gt 20 ] || [ "$RESIDUES" -gt 5000 ]; then
+      echo "CLOUD_RESOURCE_LIMIT: MEME was skipped to protect the shared Streamlit worker (${NSEQ} proteins; ${RESIDUES} aa). No sequences were subsampled. The shared-Cloud MEME envelope is 20 proteins and 5,000 aa; run full-family MEME locally/HPC and import MEME XML for larger families." >&2
+      exit 75
+    fi
+  fi
+
+  # Keep a runaway MEME child from exhausting the parent Streamlit process.
+  # These are child-process limits only; failure to set a platform-specific
+  # limit is non-fatal because the size gate above remains active.
+  ulimit -t 180 2>/dev/null || true
+  ulimit -v 700000 2>/dev/null || true
+fi
+
 mkdir -p \
   "$RUNTIME/bin" \
   "$RUNTIME/libexec/meme-5.5.9" \
