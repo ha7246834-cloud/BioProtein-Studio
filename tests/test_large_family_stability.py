@@ -36,6 +36,24 @@ class LargeFamilyPhylogenyTests(unittest.TestCase):
         self.assertIn('Large-family Auto mode', result['warning'])
         ft.assert_called_once()
 
+    def test_cloud_auto_uses_fasttree_even_for_tiny_family(self):
+        sentinel = {
+            'tree_text': '(A:1,B:1,C:1);',
+            'alignment_text': '>A\nAAA\n',
+            'method': 'MAFFT + FastTree',
+            'qc': None,
+            'warning': '',
+            'log_text': '',
+        }
+        with patch.object(gp, '_is_shared_cloud', return_value=True), \
+             patch.object(gp, 'publication_phylogeny_ready', return_value=True), \
+             patch.object(gp, 'external_phylogeny_ready', return_value=True), \
+             patch.object(gp, 'run_mafft_iqtree', side_effect=AssertionError('IQ-TREE must never run in shared-Cloud Auto mode')), \
+             patch.object(gp, 'run_mafft_fasttree', return_value=sentinel.copy()) as ft:
+            result = gp.build_phylogeny(proteins(5, 120), mode='auto')
+        self.assertEqual(result['method'], 'MAFFT + FastTree')
+        ft.assert_called_once()
+
     def test_cloud_auto_uses_fasttree_for_40_proteins(self):
         sentinel = {
             'tree_text': '(A:1,B:1,C:1);',
@@ -58,7 +76,7 @@ class LargeFamilyPhylogenyTests(unittest.TestCase):
         with patch.object(gp, '_is_shared_cloud', return_value=True), \
              patch.object(gp, 'publication_phylogeny_ready', return_value=True), \
              patch.object(gp, 'run_mafft_iqtree') as iq:
-            with self.assertRaisesRegex(RuntimeError, 'too resource-intensive'):
+            with self.assertRaisesRegex(RuntimeError, 'intentionally disabled'):
                 gp.build_phylogeny(proteins(40, 211), mode='publication')
         iq.assert_not_called()
 
@@ -80,7 +98,7 @@ class LargeFamilyPhylogenyTests(unittest.TestCase):
     def test_cloud_blocks_oversized_explicit_publication_run(self):
         with patch.object(gp, '_is_shared_cloud', return_value=True), \
              patch.object(gp, 'publication_phylogeny_ready', return_value=True):
-            with self.assertRaisesRegex(RuntimeError, 'too resource-intensive'):
+            with self.assertRaisesRegex(RuntimeError, 'intentionally disabled'):
                 gp.build_phylogeny(proteins(120), mode='publication')
 
     def test_cloud_auto_threads_are_capped(self):

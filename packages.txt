@@ -1,4 +1,3 @@
 mafft
 fasttree
-iqtree
 emboss
