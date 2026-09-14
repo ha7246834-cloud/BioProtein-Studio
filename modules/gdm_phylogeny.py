@@ -17,10 +17,18 @@ from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
 from .gdm_common import fasta_text
 
 
+# Workstation/local Auto policy.
 AUTO_IQTREE_MAX_SEQUENCES = 60
 AUTO_IQTREE_MAX_RESIDUES = 40000
-CLOUD_PUBLICATION_MAX_SEQUENCES = 80
-CLOUD_PUBLICATION_MAX_RESIDUES = 60000
+
+# Streamlit Community Cloud is substantially tighter than a workstation.
+# A real 40-protein / 8,411-aa family exhausted the shared app while
+# ModelFinder + UFBoot + SH-aLRT were running, so Cloud Auto is deliberately
+# conservative and falls back to MAFFT + FastTree above this envelope.
+CLOUD_AUTO_IQTREE_MAX_SEQUENCES = 20
+CLOUD_AUTO_IQTREE_MAX_RESIDUES = 5000
+CLOUD_PUBLICATION_MAX_SEQUENCES = 20
+CLOUD_PUBLICATION_MAX_RESIDUES = 5000
 
 
 def _which_fasttree():
@@ -361,9 +369,16 @@ def build_phylogeny(proteins: Dict[str, str], mode='auto', bootstrap=1000, alrt=
         return run_mafft_fasttree(proteins)
 
     if mode == 'auto':
+        if _is_shared_cloud():
+            auto_max_sequences = CLOUD_AUTO_IQTREE_MAX_SEQUENCES
+            auto_max_residues = CLOUD_AUTO_IQTREE_MAX_RESIDUES
+        else:
+            auto_max_sequences = AUTO_IQTREE_MAX_SEQUENCES
+            auto_max_residues = AUTO_IQTREE_MAX_RESIDUES
+
         small_enough_for_iqtree = (
-            n <= AUTO_IQTREE_MAX_SEQUENCES
-            and total_residues <= AUTO_IQTREE_MAX_RESIDUES
+            n <= auto_max_sequences
+            and total_residues <= auto_max_residues
         )
 
         if small_enough_for_iqtree and publication_phylogeny_ready():
@@ -385,13 +400,21 @@ def build_phylogeny(proteins: Dict[str, str], mode='auto', bootstrap=1000, alrt=
             )
             return result
 
-        if publication_phylogeny_ready():
+        # Do not silently fall back to a resource-heavy IQ-TREE run on
+        # shared Cloud when FastTree is unavailable. A controlled error is
+        # safer than killing the whole Streamlit process.
+        if publication_phylogeny_ready() and not _is_shared_cloud():
             return run_mafft_iqtree(
                 proteins,
                 bootstrap=bootstrap,
                 alrt=alrt,
                 threads=threads,
-                timeout=1800 if _is_shared_cloud() else 7200,
+                timeout=7200,
+            )
+        if _is_shared_cloud() and publication_phylogeny_ready():
+            raise RuntimeError(
+                'Cloud Auto selected the safe FastTree route, but MAFFT/FastTree is unavailable. '
+                'Do not fall back to IQ-TREE on shared Cloud; restore FastTree or run Publication locally/HPC.'
             )
 
     return run_nj_fallback(proteins)
