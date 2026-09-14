@@ -13,6 +13,7 @@ on:
       - 'tests/test_cdd_meme_cloud_stability.py'
       - 'tests/test_gene_structure_performance.py'
       - 'tests/test_cloud_preflight_ui.py'
+      - 'tests/test_cloud_runtime_policy.py'
       - 'tests/test_streamlit_gdm_smoke.py'
       - '.github/workflows/large-family-stability.yml'
 
@@ -48,4 +49,5 @@ jobs:
             tests.test_cdd_meme_cloud_stability \
             tests.test_gene_structure_performance \
             tests.test_cloud_preflight_ui \
+            tests.test_cloud_runtime_policy \
             tests.test_streamlit_gdm_smoke
