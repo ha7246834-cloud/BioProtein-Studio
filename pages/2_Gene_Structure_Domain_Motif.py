@@ -132,15 +132,22 @@ def package(r, protein_txt, cds_txt, gen_txt, tree_txt, params, structure_txt=''
     return zip_files(files)
 
 
+shared_cloud_runtime = bool(phylogeny_tool_status().get('shared_cloud', False))
+
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric('Phylogeny', 'IQ-TREE publication mode' if publication_phylogeny_ready() else ('MAFFT + FastTree' if external_phylogeny_ready() else 'NJ fallback available'))
+if shared_cloud_runtime:
+    c1.metric('Phylogeny', 'MAFFT + FastTree cloud mode' if external_phylogeny_ready() else 'NJ fallback available')
+else:
+    c1.metric('Phylogeny', 'IQ-TREE publication mode' if publication_phylogeny_ready() else ('MAFFT + FastTree' if external_phylogeny_ready() else 'NJ fallback available'))
 c2.metric('MEME local', 'Ready' if meme_ready() else 'Not installed')
 c3.metric('Gene mapping', 'miniprot Ready' if miniprot_ready() else 'miniprot missing')
 c4.metric('Reference fetch', 'NCBI Datasets Ready' if datasets_ready() else 'datasets missing')
 c5.metric('CDD', 'NCBI remote')
 if not meme_ready() or not est2genome_ready():
     st.info('For full one-click mode use the supplied Linux/WSL Conda environment. The app does not replace MEME or spliced alignment with a homemade predictor.')
-if not publication_phylogeny_ready():
+if shared_cloud_runtime:
+    st.info('Shared Streamlit Cloud uses MAFFT + FastTree for automatic phylogeny. IQ-TREE publication inference is intentionally local/HPC-only to prevent shared-process crashes; a validated Newick tree can be uploaded here.')
+elif not publication_phylogeny_ready():
     st.info('Publication phylogeny needs MAFFT + IQ-TREE. If IQ-TREE is unavailable, Auto mode falls back to MAFFT + FastTree and then NJ screening.')
 if not auto_reference_ready():
     st.info('Automatic protein → reference genome → exon/intron mapping needs both miniprot and NCBI Datasets CLI. Manual CDS+genomic and annotation routes remain available.')
@@ -171,27 +178,32 @@ with auto:
             reference_taxon = st.text_input('Species / NCBI taxon', placeholder='e.g. Carica papaya')
         with rc2:
             reference_accession = st.text_input('Optional assembly accession', placeholder='e.g. GCF_... or GCA_...')
-        reference_threads = st.slider('Reference mapping threads', 1, 16, 4)
+        reference_threads = st.slider('Reference mapping threads', 1, 16, 2 if shared_cloud_runtime else 4)
         st.caption('Scientific route: NCBI Datasets selects/downloads an annotated reference assembly → miniprot maps each protein splice-aware to the genome → CDS/genomic FASTA and exon coordinates are extracted → translated CDS is checked against the input protein. Ambiguous/low-confidence loci are marked REVIEW, not forced.')
     with st.expander('Phylogeny settings', expanded=True):
         auto_tree = st.checkbox('Automatically build phylogeny when Newick is not uploaded', True)
+        phylo_options = ['auto', 'fasttree', 'nj'] if shared_cloud_runtime else ['auto', 'publication', 'fasttree', 'nj']
         phylo_mode = st.selectbox(
-            'Automatic tree method', ['auto', 'publication', 'fasttree', 'nj'],
+            'Automatic tree method', phylo_options,
             format_func=lambda x: {
-                'auto': 'Auto — adaptive: IQ-TREE for small families, FastTree for larger families',
+                'auto': 'Auto — MAFFT + FastTree cloud-safe' if shared_cloud_runtime else 'Auto — adaptive: IQ-TREE for small families, FastTree for larger families',
                 'publication': 'Publication — MAFFT + IQ-TREE + ModelFinder + SH-aLRT + ultrafast bootstrap',
                 'fasttree': 'Fast screening — MAFFT + FastTree',
                 'nj': 'Internal Neighbor-Joining — quick screening only'
             }[x]
         )
-        pc1, pc2, pc3 = st.columns(3)
-        with pc1:
-            phylo_bootstrap = st.selectbox('Ultrafast bootstrap replicates', [1000, 2000, 5000], index=0)
-        with pc2:
-            phylo_alrt = st.selectbox('SH-aLRT replicates', [1000, 2000, 5000], index=0)
-        with pc3:
-            phylo_threads = st.selectbox('IQ-TREE threads', ['2', '4', '8', 'AUTO'], index=0)
-        st.caption('Publication mode uses MAFFT alignment followed by IQ-TREE maximum-likelihood inference, automatic ModelFinder selection, SH-aLRT support and ultrafast bootstrap. FastTree remains a screening option.')
+        if shared_cloud_runtime:
+            phylo_bootstrap, phylo_alrt, phylo_threads = 1000, 1000, '2'
+            st.caption('Cloud stability mode: IQ-TREE controls are hidden because publication inference is local/HPC-only. Auto uses MAFFT + FastTree without subsampling.')
+        else:
+            pc1, pc2, pc3 = st.columns(3)
+            with pc1:
+                phylo_bootstrap = st.selectbox('Ultrafast bootstrap replicates', [1000, 2000, 5000], index=0)
+            with pc2:
+                phylo_alrt = st.selectbox('SH-aLRT replicates', [1000, 2000, 5000], index=0)
+            with pc3:
+                phylo_threads = st.selectbox('IQ-TREE threads', ['2', '4', '8', 'AUTO'], index=0)
+            st.caption('Publication mode uses MAFFT alignment followed by IQ-TREE maximum-likelihood inference, automatic ModelFinder selection, SH-aLRT support and ultrafast bootstrap. FastTree remains a screening option.')
     s1, s2, s3, s4 = st.columns(4)
     with s1:
         do_cdd = st.checkbox('Run NCBI CDD', True)
@@ -221,7 +233,7 @@ with auto:
                 for seq in preview_proteins.values()
             )
             preview_batches = max(1, (preview_n + CDD_BATCH_SIZE - 1) // CDD_BATCH_SIZE)
-            shared_cloud = Path('/mount/src').exists()
+            shared_cloud = shared_cloud_runtime
 
             with st.expander('🧪 Run preflight & resource plan', expanded=True):
                 m1, m2, m3 = st.columns(3)
@@ -236,12 +248,12 @@ with auto:
                     tree_plan = 'Phylogeny disabled'
                     tree_level = 'info'
                 elif phylo_mode == 'auto':
-                    auto_seq_limit = CLOUD_AUTO_IQTREE_MAX_SEQUENCES if shared_cloud else AUTO_IQTREE_MAX_SEQUENCES
-                    auto_residue_limit = CLOUD_AUTO_IQTREE_MAX_RESIDUES if shared_cloud else AUTO_IQTREE_MAX_RESIDUES
-                    if preview_n <= auto_seq_limit and preview_residues <= auto_residue_limit:
+                    if shared_cloud:
+                        tree_plan = 'Auto → MAFFT + FastTree cloud-safe screening'
+                    elif preview_n <= AUTO_IQTREE_MAX_SEQUENCES and preview_residues <= AUTO_IQTREE_MAX_RESIDUES:
                         tree_plan = 'Auto → MAFFT + IQ-TREE publication-oriented inference'
                     else:
-                        tree_plan = 'Auto → MAFFT + FastTree cloud-safe screening'
+                        tree_plan = 'Auto → MAFFT + FastTree screening'
                     tree_level = 'success'
                 elif phylo_mode == 'publication' and shared_cloud and (
                     preview_n > CLOUD_PUBLICATION_MAX_SEQUENCES
@@ -337,12 +349,16 @@ with auto:
             phylo_progress_text = f'Phylogeny: validating uploaded Newick for {family_nseq} proteins...'
         elif not auto_tree:
             phylo_progress_text = 'Phylogeny: automatic inference disabled.'
+        elif phylo_mode == 'auto' and shared_cloud_runtime:
+            phylo_progress_text = (
+                f'Phylogeny: shared-Cloud safe route ({family_nseq} proteins, {family_residues:,} aa) → '
+                'MAFFT + FastTree screening...'
+            )
         elif phylo_mode == 'auto' and (
-            family_nseq > (CLOUD_AUTO_IQTREE_MAX_SEQUENCES if Path('/mount/src').exists() else AUTO_IQTREE_MAX_SEQUENCES)
-            or family_residues > (CLOUD_AUTO_IQTREE_MAX_RESIDUES if Path('/mount/src').exists() else AUTO_IQTREE_MAX_RESIDUES)
+            family_nseq > AUTO_IQTREE_MAX_SEQUENCES or family_residues > AUTO_IQTREE_MAX_RESIDUES
         ):
             phylo_progress_text = (
-                f'Phylogeny: cloud-safe route ({family_nseq} proteins, {family_residues:,} aa) → '
+                f'Phylogeny: large-family route ({family_nseq} proteins, {family_residues:,} aa) → '
                 'MAFFT + FastTree screening...'
             )
         elif phylo_mode == 'publication':
