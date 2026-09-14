@@ -76,7 +76,7 @@ class LargeFamilyPhylogenyTests(unittest.TestCase):
         with patch.object(gp, '_is_shared_cloud', return_value=True), \
              patch.object(gp, 'publication_phylogeny_ready', return_value=True), \
              patch.object(gp, 'run_mafft_iqtree') as iq:
-            with self.assertRaisesRegex(RuntimeError, 'too resource-intensive'):
+            with self.assertRaisesRegex(RuntimeError, 'intentionally disabled'):
                 gp.build_phylogeny(proteins(40, 211), mode='publication')
         iq.assert_not_called()
 
@@ -98,7 +98,7 @@ class LargeFamilyPhylogenyTests(unittest.TestCase):
     def test_cloud_blocks_oversized_explicit_publication_run(self):
         with patch.object(gp, '_is_shared_cloud', return_value=True), \
              patch.object(gp, 'publication_phylogeny_ready', return_value=True):
-            with self.assertRaisesRegex(RuntimeError, 'too resource-intensive'):
+            with self.assertRaisesRegex(RuntimeError, 'intentionally disabled'):
                 gp.build_phylogeny(proteins(120), mode='publication')
 
     def test_cloud_auto_threads_are_capped(self):
