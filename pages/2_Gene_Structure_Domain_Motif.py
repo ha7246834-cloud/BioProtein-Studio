@@ -11,6 +11,11 @@ from modules.gdm_phylogeny import build_phylogeny, external_phylogeny_ready, pub
 from modules.gdm_plot import gene_structure, missing_structure_figure, architecture, combined, phylogeny_figure, fig_bytes
 from modules.gdm_style import STYLE_PRESETS, style_from_preset, assign_colors
 from modules.gdm_reference import auto_resolve_gene_structure, auto_reference_ready, datasets_ready, miniprot_ready, reference_tool_status
+from modules import runtime
+
+# Publish the detected runtime profile so child processes and the vendored MEME
+# shell wrapper make the same shared-cloud decision as the Python layer.
+runtime.export_runtime_env()
 
 st.set_page_config(page_title='Gene Structure, Domains & Motifs | BioProtein Studio', page_icon='🧬', layout='wide')
 st.title('🧬 Gene Structure, Conserved Domains & Motifs')
@@ -25,7 +30,7 @@ def empty_result():
     return dict(
         sequence_qc=pd.DataFrame(), cds_qc=pd.DataFrame(), gene_structures=pd.DataFrame(), gene_qc=pd.DataFrame(), domains_raw=pd.DataFrame(),
         domains=pd.DataFrame(), domain_qc=pd.DataFrame(), motifs=pd.DataFrame(), motif_summary=pd.DataFrame(), motif_qc=pd.DataFrame(),
-        errors=[], warnings=[], figures={}, raw_est={}, ncbi_bundles={}, auto_reference_bundles={}, tree_text='', alignment_text='', phylogeny_method='', phylogeny_qc=pd.DataFrame(), reference_qc=pd.DataFrame(), reference_meta=pd.DataFrame(), reference_mapping=pd.DataFrame(), annotation_reconciliation=pd.DataFrame(), miniprot_raw='', phylogeny_log='', iqtree_report='', phylogeny_command=''
+        errors=[], warnings=[], figures={}, raw_est={}, ncbi_bundles={}, auto_reference_bundles={}, tree_text='', alignment_text='', phylogeny_method='', phylogeny_qc=pd.DataFrame(), reference_qc=pd.DataFrame(), reference_meta=pd.DataFrame(), reference_mapping=pd.DataFrame(), annotation_reconciliation=pd.DataFrame(), miniprot_raw='', phylogeny_log='', iqtree_report='', phylogeny_command='', package=b'', order=[]
     )
 
 
@@ -318,6 +323,12 @@ with auto:
 
     if st.button('🚀 Run complete analysis', type='primary', width='stretch'):
         r = empty_result()
+        # Persist the (mutable) result object up-front and keep mutating it in
+        # place. Every stage's output is therefore already in session_state, so a
+        # failure in a later stage never discards completed upstream results.
+        st.session_state.gdm_result = r
+        runtime.log_event('run.start', rss_mb=runtime.current_rss_mb(),
+                          shared_cloud=runtime.is_shared_cloud())
         primary = file_text(up) if up else paste.strip()
         uploaded_tree_text = file_text(tree_up)
         tree_text = uploaded_tree_text
@@ -489,15 +500,24 @@ with auto:
                 else:
                     r['errors'].append('MEME: ' + msg)
 
-        r['motif_qc'] = motif_qc(r['motifs'], r['motif_summary'], len(proteins), r['domains'])
-        order = choose_order(
-            set(proteins)
-            | set(r['gene_structures'].gene if not r['gene_structures'].empty else [])
-            | set(r['domains'].gene if not r['domains'].empty else [])
-            | set(r['motifs'].gene if not r['motifs'].empty else []),
-            newick_order(tree_text) if tree_text else []
-        )
+        try:
+            r['motif_qc'] = motif_qc(r['motifs'], r['motif_summary'], len(proteins), r['domains'])
+        except Exception as e:
+            r['errors'].append('Motif validation: ' + str(e))
+        try:
+            order = choose_order(
+                set(proteins)
+                | set(r['gene_structures'].gene if not r['gene_structures'].empty else [])
+                | set(r['domains'].gene if not r['domains'].empty else [])
+                | set(r['motifs'].gene if not r['motifs'].empty else []),
+                newick_order(tree_text) if tree_text else []
+            )
+        except Exception as e:
+            r['errors'].append('Ordering: ' + str(e))
+            order = sorted(set(proteins))
         r['order'] = order
+        runtime.log_event('run.analysis_done', rss_mb=runtime.current_rss_mb(),
+                          proteins=len(proteins), domains=len(r['domains']), motifs=len(r['motifs']))
 
         prog.progress(88, text='Preparing reproducibility package...')
         # Figures are deliberately rendered on demand below. Generating every
@@ -511,10 +531,14 @@ with auto:
             )
 
         params = dict(cdd_evalue=float(cdd_e), meme_nmotifs=int(nm), meme_min_width=int(minw), meme_max_width=int(maxw), meme_model=model, plot_domains='specific', plot_motifs='pass', tree_provided=bool(uploaded_tree_text), phylogeny_method=r.get('phylogeny_method',''), phylogeny_mode=phylo_mode, phylogeny_bootstrap=int(phylo_bootstrap), phylogeny_alrt=int(phylo_alrt), auto_phylogeny=bool(auto_tree), auto_reference=bool(auto_reference), reference_taxon=reference_taxon.strip(), reference_accession=reference_accession.strip())
-        r['package'] = package(r, protein_txt, file_text(cds_up) if cds_up else (primary if mode.startswith('CDS') else ''), file_text(gen_up), tree_text, params, structure_txt)
+        try:
+            r['package'] = package(r, protein_txt, file_text(cds_up) if cds_up else (primary if mode.startswith('CDS') else ''), file_text(gen_up), tree_text, params, structure_txt)
+        except Exception as e:
+            r['errors'].append('Reproducibility package: ' + str(e))
+            r['package'] = b''
         # Streamlit Community Cloud uses ephemeral storage. Avoid writing duplicate
         # ZIP archives on every run there; local/WSL users still receive autosave.
-        if not Path('/mount/src').exists():
+        if r.get('package') and not Path('/mount/src').exists():
             try:
                 outdir = Path.cwd() / 'results'
                 outdir.mkdir(parents=True, exist_ok=True)
@@ -753,9 +777,12 @@ with auto:
             'while the complete analysis, Newick tree, and alignment remain preserved.'
         )
 
-        st.download_button('📦 Download complete analysis package', r['package'], 'BioProtein_Studio_GDM_Results_v5_5.zip', 'application/zip', type='primary', width='stretch')
-        if r.get('autosave_path'):
-            st.caption('Auto-saved locally: ' + r['autosave_path'])
+        if r.get('package'):
+            st.download_button('📦 Download complete analysis package', r['package'], 'BioProtein_Studio_GDM_Results_v5_5.zip', 'application/zip', type='primary', width='stretch')
+            if r.get('autosave_path'):
+                st.caption('Auto-saved locally: ' + r['autosave_path'])
+        else:
+            st.info('The reproducibility package is unavailable for this run, but the completed tables, tree and alignment above are preserved.')
 
 with imp:
     st.write('Import your previous manual NCBI CDD and MEME results and re-validate them.')
