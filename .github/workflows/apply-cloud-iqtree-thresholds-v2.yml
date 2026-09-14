@@ -1,0 +1,40 @@
+name: Apply safer Cloud IQ-TREE thresholds v2
+
+on:
+  push:
+    branches:
+      - fix/cloud-iqtree-thresholds-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/cloud-iqtree-thresholds-v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python tools/patch_cloud_iqtree_thresholds_v2.py
+      - name: Syntax check
+        run: |
+          python -m py_compile \
+            modules/gdm_phylogeny.py \
+            pages/2_Gene_Structure_Domain_Motif.py \
+            tests/test_large_family_stability.py
+      - name: Commit patched files
+        run: |
+          if git diff --quiet -- modules/gdm_phylogeny.py pages/2_Gene_Structure_Domain_Motif.py tests/test_large_family_stability.py; then
+            echo 'No changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add modules/gdm_phylogeny.py pages/2_Gene_Structure_Domain_Motif.py tests/test_large_family_stability.py
+          git commit -m 'Use safer IQ-TREE thresholds on Streamlit Cloud'
+          git push origin HEAD:fix/cloud-iqtree-thresholds-v2
