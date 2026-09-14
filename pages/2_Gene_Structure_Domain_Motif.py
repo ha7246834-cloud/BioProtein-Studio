@@ -6,8 +6,8 @@ import pandas as pd
 import streamlit as st
 from modules.gdm_common import parse_fasta, fasta_text, protein_qc, translate_cds, looks_ncbi_accession, newick_order, choose_order, zip_files
 from modules.gdm_structure import est2genome_ready, gene_structure_batch, ncbi_structures, parse_gene_structure_annotation
-from modules.gdm_cdd_meme import run_cdd, collapse_domains, domain_qc, meme_ready, run_meme, motif_qc, parse_cdd, parse_meme_xml, CDD_BATCH_SIZE, CDD_MAX_SEQUENCES, CLOUD_MEME_MAX_SEQUENCES, CLOUD_MEME_MAX_RESIDUES, CDD_BATCH_SIZE, CDD_MAX_SEQUENCES, CLOUD_MEME_MAX_SEQUENCES, CLOUD_MEME_MAX_RESIDUES, CDD_BATCH_SIZE, CDD_MAX_SEQUENCES, CLOUD_MEME_MAX_SEQUENCES, CLOUD_MEME_MAX_RESIDUES
-from modules.gdm_phylogeny import build_phylogeny, external_phylogeny_ready, publication_phylogeny_ready, phylogeny_tool_status, AUTO_IQTREE_MAX_SEQUENCES, AUTO_IQTREE_MAX_RESIDUES, CLOUD_AUTO_IQTREE_MAX_SEQUENCES, CLOUD_AUTO_IQTREE_MAX_RESIDUES, CLOUD_PUBLICATION_MAX_SEQUENCES, CLOUD_PUBLICATION_MAX_RESIDUES, AUTO_IQTREE_MAX_SEQUENCES, AUTO_IQTREE_MAX_RESIDUES, CLOUD_PUBLICATION_MAX_SEQUENCES, CLOUD_PUBLICATION_MAX_RESIDUES, AUTO_IQTREE_MAX_SEQUENCES, AUTO_IQTREE_MAX_RESIDUES, CLOUD_PUBLICATION_MAX_SEQUENCES, CLOUD_PUBLICATION_MAX_RESIDUES
+from modules.gdm_cdd_meme import run_cdd, collapse_domains, domain_qc, meme_ready, run_meme, motif_qc, parse_cdd, parse_meme_xml, CDD_BATCH_SIZE, CDD_MAX_SEQUENCES, CLOUD_MEME_MAX_SEQUENCES, CLOUD_MEME_MAX_RESIDUES
+from modules.gdm_phylogeny import build_phylogeny, external_phylogeny_ready, publication_phylogeny_ready, phylogeny_tool_status, AUTO_IQTREE_MAX_SEQUENCES, AUTO_IQTREE_MAX_RESIDUES, CLOUD_AUTO_IQTREE_MAX_SEQUENCES, CLOUD_AUTO_IQTREE_MAX_RESIDUES, CLOUD_PUBLICATION_MAX_SEQUENCES, CLOUD_PUBLICATION_MAX_RESIDUES
 from modules.gdm_plot import gene_structure, missing_structure_figure, architecture, combined, phylogeny_figure, fig_bytes
 from modules.gdm_style import STYLE_PRESETS, style_from_preset, assign_colors
 from modules.gdm_reference import auto_resolve_gene_structure, auto_reference_ready, datasets_ready, miniprot_ready, reference_tool_status
