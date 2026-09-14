@@ -5,32 +5,52 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 VENDOR="$(CDPATH= cd -- "$HERE/.." && pwd)"
 
 CORE="$VENDOR/meme-5.5.9/meme-core"
-RUNTIME="/tmp/bps_meme_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# Shared Streamlit Cloud has a tight process budget. A real 40-protein /
-# 8,411-aa run terminated the whole app while MEME was enabled, so the
-# vendored Cloud fallback refuses inputs above a deliberately conservative
-# envelope instead of allowing the child process to take down Streamlit.
-# Local/WSL/HPC runs are unaffected.
-if [ -n "${STREAMLIT_SHARING_MODE:-}" ] || [ -d /mount/src ]; then
+# Shared-cloud detection agrees with the Python layer (modules.runtime), which
+# exports BPS_SHARED_CLOUD before any MEME run. STREAMLIT_SHARING_MODE and
+# /mount/src are kept as independent fallbacks.
+IS_CLOUD=0
+if [ "${BPS_SHARED_CLOUD:-}" = "1" ] || [ -n "${STREAMLIT_SHARING_MODE:-}" ] || [ -d /mount/src ]; then
+  IS_CLOUD=1
+fi
+
+# Evidence-based shared-cloud envelope. Measured vendored-core memory for a
+# 40-protein / 8,411-aa family is ~11 MB, so the old 20-protein / 5,000-aa gate
+# defended against nothing while blocking real gene families. These limits are a
+# wall-time guard for the single-core build and match CLOUD_MEME_MAX_* in
+# modules/gdm_cdd_meme.py. The Python run_guarded() wrapper enforces the real
+# kernel memory/CPU ceiling.
+MAX_SEQ="${BPS_MEME_MAX_SEQ:-120}"
+MAX_RES="${BPS_MEME_MAX_RES:-30000}"
+
+if [ "$IS_CLOUD" = "1" ]; then
   INPUT="${1:-}"
   if [ -f "$INPUT" ]; then
     NSEQ="$(grep -c '^>' "$INPUT" 2>/dev/null || true)"
     RESIDUES="$(awk '!/^>/ {gsub(/[[:space:]\-*]/, ""); n += length($0)} END {print n + 0}' "$INPUT")"
     NSEQ="${NSEQ:-0}"
     RESIDUES="${RESIDUES:-0}"
-    if [ "$NSEQ" -gt 20 ] || [ "$RESIDUES" -gt 5000 ]; then
-      echo "CLOUD_RESOURCE_LIMIT: MEME was skipped to protect the shared Streamlit worker (${NSEQ} proteins; ${RESIDUES} aa). No sequences were subsampled. The shared-Cloud MEME envelope is 20 proteins and 5,000 aa; run full-family MEME locally/HPC and import MEME XML for larger families." >&2
+    if [ "$NSEQ" -gt "$MAX_SEQ" ] || [ "$RESIDUES" -gt "$MAX_RES" ]; then
+      echo "CLOUD_RESOURCE_LIMIT: MEME was skipped to protect the shared Streamlit worker (${NSEQ} proteins; ${RESIDUES} aa). No sequences were subsampled. The shared-Cloud MEME envelope is ${MAX_SEQ} proteins and ${MAX_RES} aa; run full-family MEME locally/HPC and import MEME XML for larger families." >&2
       exit 75
     fi
   fi
 
-  # Keep a runaway MEME child from exhausting the parent Streamlit process.
-  # These are child-process limits only; failure to set a platform-specific
-  # limit is non-fatal because the size gate above remains active.
-  ulimit -t 180 2>/dev/null || true
-  ulimit -v 700000 2>/dev/null || true
+  # Defense-in-depth child limits (the Python run_guarded() ceiling is primary).
+  # A missing platform limit is non-fatal because the size gate above still ran.
+  ulimit -t 600 2>/dev/null || true
+  ulimit -v 900000 2>/dev/null || true
 fi
+
+# Test/diagnostic hook: validate the gate without launching the (slow) core.
+if [ "${BPS_MEME_GATE_ONLY:-}" = "1" ]; then
+  exit 0
+fi
+
+# Isolated per-invocation runtime tree (was a fixed /tmp path that collided
+# across concurrent runs and never got cleaned up).
+RUNTIME="$(mktemp -d "${TMPDIR:-/tmp}/bps_meme.XXXXXXXX")"
+trap 'rm -rf "$RUNTIME"' EXIT INT TERM
 
 mkdir -p \
   "$RUNTIME/bin" \
@@ -54,4 +74,12 @@ chmod 755 "$RUNTIME/libexec/meme-5.5.9/meme_xml_to_html"
 GS="$(command -v gs 2>/dev/null || command -v true)"
 ln -sf "$GS" "$RUNTIME/bin/gs"
 
-exec "$CORE" "$@"
+# The vendored meme_xml_to_html/gs stubs live in RUNTIME; expose them on PATH so
+# the core's post-processing finds them. BioProtein Studio consumes meme.xml
+# directly, so HTML/logo conversion is intentionally a no-op.
+PATH="$RUNTIME/bin:$RUNTIME/libexec/meme-5.5.9:$PATH"
+export PATH
+
+# Not exec: keep this shell as parent so the EXIT trap cleans up RUNTIME.
+"$CORE" "$@"
+exit $?
