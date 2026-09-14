@@ -1,4 +1,5 @@
-streamlit
+streamlit==1.63.0
+pyarrow<25
 biopython
 pandas
 numpy
