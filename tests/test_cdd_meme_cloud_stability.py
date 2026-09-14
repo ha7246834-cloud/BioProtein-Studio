@@ -82,10 +82,23 @@ class CDDBatchingTests(unittest.TestCase):
 
 class MEMECloudPolicyTests(unittest.TestCase):
     def test_small_family_allowed(self):
-        allowed, nseq, residues = cm.meme_cloud_policy(proteins(50, 200))
+        allowed, nseq, residues = cm.meme_cloud_policy(proteins(20, 200))
         self.assertTrue(allowed)
-        self.assertEqual(nseq, 50)
-        self.assertEqual(residues, 10000)
+        self.assertEqual(nseq, 20)
+        self.assertEqual(residues, 4000)
+
+    def test_real_40_protein_case_is_rejected_before_subprocess(self):
+        family = proteins(40, 211)
+        allowed, nseq, residues = cm.meme_cloud_policy(family)
+        self.assertFalse(allowed)
+        self.assertEqual(nseq, 40)
+        self.assertEqual(residues, 8440)
+        with patch.object(cm, '_is_shared_cloud', return_value=True), \
+             patch.object(cm, 'meme_ready', return_value=True), \
+             patch.object(cm.subprocess, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'CLOUD_RESOURCE_LIMIT'):
+                cm.run_meme(family, nmotifs=10)
+        run.assert_not_called()
 
     def test_large_family_rejected_without_subsampling(self):
         family = proteins(200, 400)
