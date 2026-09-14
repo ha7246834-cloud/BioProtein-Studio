@@ -1,3 +1,7 @@
+import os
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -98,6 +102,30 @@ class MEMECloudPolicyTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(nseq, len(family))
         self.assertEqual(residues, 80000)
+
+    def test_vendor_wrapper_blocks_real_40_protein_cloud_case_before_core(self):
+        """Regression for the 40-protein / ~8.4k-aa Streamlit worker crash."""
+        wrapper = Path('vendor/bin/meme').resolve()
+        self.assertTrue(wrapper.exists())
+        family = proteins(40, 211)
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            fasta = td / 'rice_pr1_like.faa'
+            out = td / 'meme_out'
+            fasta.write_text(''.join(f'>{name}\n{seq}\n' for name, seq in family.items()))
+            env = os.environ.copy()
+            env['STREAMLIT_SHARING_MODE'] = '1'
+            proc = subprocess.run(
+                [str(wrapper), str(fasta), '-protein', '-oc', str(out), '-nmotifs', '10'],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=10,
+            )
+        self.assertEqual(proc.returncode, 75)
+        self.assertIn('CLOUD_RESOURCE_LIMIT', proc.stderr)
+        self.assertIn('40 proteins', proc.stderr)
+        self.assertFalse(out.exists())
 
 
 if __name__ == '__main__':
