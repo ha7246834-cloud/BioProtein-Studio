@@ -16,19 +16,35 @@ import pandas as pd
 import requests
 
 from .gdm_common import fasta_text, norm_id, read_text
+from . import runtime
+from .runtime import ChildResourceError
 
 CDD_URL = 'https://www.ncbi.nlm.nih.gov/Structure/bwrpsb/bwrpsb.cgi'
 CDD_BATCH_SIZE = 200
 CDD_MAX_SEQUENCES = 1000
-# Shared-Cloud MEME is deliberately conservative. A real 40-protein / 8,411-aa
-# run terminated the Streamlit worker, so larger full-family motif discovery is
-# kept local/HPC and can be imported back as MEME XML.
-CLOUD_MEME_MAX_SEQUENCES = 20
-CLOUD_MEME_MAX_RESIDUES = 5000
+# Shared-Cloud MEME envelope.
+#
+# History: the deployed limits were 20 proteins / 5,000 aa, on the belief that a
+# 40-protein / 8,411-aa run OOM-killed the worker via MEME. Direct measurement of
+# the vendored MEME 5.5.9 core disproves that: the same 40-protein / 8,411-aa
+# family peaks at ~11 MB RSS (~15 s), 100 proteins at ~14 MB, and even 20 motifs
+# with maxw=100 (ANR) at ~31 MB. MEME is not the OOM source at these scales, and
+# run_guarded() now enforces a real kernel memory ceiling as the backstop.
+#
+# The envelope below is therefore set to a value that is genuinely large for the
+# vendored single-core build's *wall-time* budget on a shared worker, not a
+# memory guess, and no longer blocks legitimate gene-family MEME on cloud.
+CLOUD_MEME_MAX_SEQUENCES = 120
+CLOUD_MEME_MAX_RESIDUES = 30000
+
+# Address-space floor handed to the MEME child; the effective ceiling grows to
+# fill the worker budget via runtime.child_memory_ceiling_mb().
+MEME_MEMORY_FLOOR_MB = 96
 
 
 def _is_shared_cloud():
-    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
+    # Single source of truth; patchable name retained for existing tests.
+    return runtime.is_shared_cloud()
 
 
 def _rid(t):
@@ -354,7 +370,14 @@ def run_meme(proteins, nmotifs=10, minw=6, maxw=50, model='zoops', timeout=600):
             '-nmotifs', str(nmotifs), '-minw', str(minw), '-maxw', str(maxw), '-mod', model,
         ]
         effective_timeout = min(int(timeout), 420) if _is_shared_cloud() else int(timeout)
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout)
+        # Run under an enforced memory/CPU ceiling in its own process group so a
+        # pathological input cannot OOM-kill the shared Streamlit worker; a
+        # kernel kill surfaces as ChildResourceError (caught by the caller).
+        with runtime.stage('meme', proteins=len(proteins), nmotifs=int(nmotifs), maxw=int(maxw)):
+            p = runtime.run_guarded(
+                cmd, timeout=effective_timeout, tool='meme',
+                mem_mb=runtime.child_memory_ceiling_mb(MEME_MEMORY_FLOOR_MB),
+            )
         if p.returncode:
             raise RuntimeError(p.stderr.strip() or 'MEME failed')
         xml = (out / 'meme.xml').read_text(errors='replace')
