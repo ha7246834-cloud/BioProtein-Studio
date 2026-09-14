@@ -1,0 +1,81 @@
+name: Cloud runtime compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'pages/**'
+      - 'modules/**'
+      - 'requirements.txt'
+      - 'packages.txt'
+      - 'vendor/**'
+      - 'tests/**'
+      - '.github/workflows/cloud-runtime-compat.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app.py'
+      - 'pages/**'
+      - 'modules/**'
+      - 'requirements.txt'
+      - 'packages.txt'
+      - 'vendor/**'
+      - 'tests/**'
+      - '.github/workflows/cloud-runtime-compat.yml'
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile application
+        run: |
+          python -m py_compile app.py pages/2_Gene_Structure_Domain_Motif.py modules/*.py
+      - name: Streamlit AppTest smoke
+        env:
+          MPLBACKEND: Agg
+        run: |
+          python -m unittest -v tests.test_streamlit_gdm_smoke
+      - name: Main app HTTP health
+        run: |
+          python -m streamlit run app.py --server.headless=true --server.port=8511 > /tmp/bps-main.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8511/_stcore/health; then
+              kill "$PID" || true
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/bps-main.log
+          kill "$PID" || true
+          exit 1
+      - name: GDM page HTTP health
+        env:
+          MPLBACKEND: Agg
+        run: |
+          python -m streamlit run pages/2_Gene_Structure_Domain_Motif.py --server.headless=true --server.port=8512 > /tmp/bps-gdm.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8512/_stcore/health; then
+              kill "$PID" || true
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/bps-gdm.log
+          kill "$PID" || true
+          exit 1
