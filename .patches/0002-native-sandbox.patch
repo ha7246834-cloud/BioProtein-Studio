@@ -1,0 +1,216 @@
+From f025e96244e74b968224fa570d8cc34931468f83 Mon Sep 17 00:00:00 2001
+From: Muhammad Hammad <ha7246834@gmail.com>
+Date: Mon, 14 Sep 2026 18:31:04 +0000
+Subject: [PATCH 2/7] Route every native GDM subprocess through the resource
+ sandbox; unify cloud detection
+
+MAFFT, FastTree, IQ-TREE, MEME, EMBOSS est2genome, miniprot and NCBI Datasets
+now launch via runtime.run_guarded() with an enforced RLIMIT_AS/RLIMIT_CPU
+ceiling, so a runaway child is killed by the kernel and raised as a catchable
+ChildResourceError instead of OOM-killing the whole Streamlit worker. The four
+duplicated _is_shared_cloud() copies now delegate to runtime.is_shared_cloud()
+(the module-level names are kept so existing tests can still patch them).
+
+Also raises the shared-cloud MEME envelope from 20 proteins/5,000 aa to
+120 proteins/30,000 aa: direct measurement of the vendored MEME core shows the
+40-protein/8,411-aa family peaks at ~11 MB (not an OOM source), so the old cap
+blocked legitimate science while defending against nothing. The kernel ceiling
+is now the real backstop.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SXzHvNkP6ybDucH19uqYv2
+---
+ modules/gdm_cdd_meme.py  | 37 ++++++++++++++++++++++++++++++-------
+ modules/gdm_phylogeny.py | 24 ++++++++++++++++++------
+ modules/gdm_reference.py | 13 +++++++++++--
+ modules/gdm_structure.py |  6 ++++--
+ 4 files changed, 63 insertions(+), 17 deletions(-)
+
+diff --git a/modules/gdm_cdd_meme.py b/modules/gdm_cdd_meme.py
+index 2fb0606..1f23599 100644
+--- a/modules/gdm_cdd_meme.py
++++ b/modules/gdm_cdd_meme.py
+@@ -16,19 +16,35 @@ import pandas as pd
+ import requests
+ 
+ from .gdm_common import fasta_text, norm_id, read_text
++from . import runtime
++from .runtime import ChildResourceError
+ 
+ CDD_URL = 'https://www.ncbi.nlm.nih.gov/Structure/bwrpsb/bwrpsb.cgi'
+ CDD_BATCH_SIZE = 200
+ CDD_MAX_SEQUENCES = 1000
+-# Shared-Cloud MEME is deliberately conservative. A real 40-protein / 8,411-aa
+-# run terminated the Streamlit worker, so larger full-family motif discovery is
+-# kept local/HPC and can be imported back as MEME XML.
+-CLOUD_MEME_MAX_SEQUENCES = 20
+-CLOUD_MEME_MAX_RESIDUES = 5000
++# Shared-Cloud MEME envelope.
++#
++# History: the deployed limits were 20 proteins / 5,000 aa, on the belief that a
++# 40-protein / 8,411-aa run OOM-killed the worker via MEME. Direct measurement of
++# the vendored MEME 5.5.9 core disproves that: the same 40-protein / 8,411-aa
++# family peaks at ~11 MB RSS (~15 s), 100 proteins at ~14 MB, and even 20 motifs
++# with maxw=100 (ANR) at ~31 MB. MEME is not the OOM source at these scales, and
++# run_guarded() now enforces a real kernel memory ceiling as the backstop.
++#
++# The envelope below is therefore set to a value that is genuinely large for the
++# vendored single-core build's *wall-time* budget on a shared worker, not a
++# memory guess, and no longer blocks legitimate gene-family MEME on cloud.
++CLOUD_MEME_MAX_SEQUENCES = 120
++CLOUD_MEME_MAX_RESIDUES = 30000
++
++# Address-space floor handed to the MEME child; the effective ceiling grows to
++# fill the worker budget via runtime.child_memory_ceiling_mb().
++MEME_MEMORY_FLOOR_MB = 96
+ 
+ 
+ def _is_shared_cloud():
+-    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
++    # Single source of truth; patchable name retained for existing tests.
++    return runtime.is_shared_cloud()
+ 
+ 
+ def _rid(t):
+@@ -354,7 +370,14 @@ def run_meme(proteins, nmotifs=10, minw=6, maxw=50, model='zoops', timeout=600):
+             '-nmotifs', str(nmotifs), '-minw', str(minw), '-maxw', str(maxw), '-mod', model,
+         ]
+         effective_timeout = min(int(timeout), 420) if _is_shared_cloud() else int(timeout)
+-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout)
++        # Run under an enforced memory/CPU ceiling in its own process group so a
++        # pathological input cannot OOM-kill the shared Streamlit worker; a
++        # kernel kill surfaces as ChildResourceError (caught by the caller).
++        with runtime.stage('meme', proteins=len(proteins), nmotifs=int(nmotifs), maxw=int(maxw)):
++            p = runtime.run_guarded(
++                cmd, timeout=effective_timeout, tool='meme',
++                mem_mb=runtime.child_memory_ceiling_mb(MEME_MEMORY_FLOOR_MB),
++            )
+         if p.returncode:
+             raise RuntimeError(p.stderr.strip() or 'MEME failed')
+         xml = (out / 'meme.xml').read_text(errors='replace')
+diff --git a/modules/gdm_phylogeny.py b/modules/gdm_phylogeny.py
+index 1d5d1c2..244fe81 100644
+--- a/modules/gdm_phylogeny.py
++++ b/modules/gdm_phylogeny.py
+@@ -15,6 +15,7 @@ from Bio.Align import PairwiseAligner, substitution_matrices
+ from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
+ 
+ from .gdm_common import fasta_text
++from . import runtime
+ 
+ 
+ # Workstation/local Auto policy.
+@@ -40,7 +41,9 @@ def _which_iqtree():
+ 
+ 
+ def _is_shared_cloud():
+-    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
++    # Delegates to the single source of truth in modules.runtime. Kept as a
++    # module-level name so existing tests can patch gdm_phylogeny._is_shared_cloud.
++    return runtime.is_shared_cloud()
+ 
+ 
+ def external_phylogeny_ready():
+@@ -125,7 +128,13 @@ def _run_mafft(proteins: Dict[str, str], td: Path, timeout=900):
+         cmd += ['--auto']
+     cmd.append(str(fasta))
+ 
+-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
++    # MAFFT --auto selects L-INS-i for small families, whose consistency library
++    # is the largest memory allocation in the tree stage. Run under a kernel
++    # memory ceiling so a dense family cannot OOM-kill the shared worker.
++    p = runtime.run_guarded(
++        cmd, timeout=timeout, tool='mafft',
++        mem_mb=runtime.child_memory_ceiling_mb(128),
++    )
+     if p.returncode != 0 or not p.stdout.strip():
+         raise RuntimeError(p.stderr.strip() or 'MAFFT failed to produce an alignment.')
+     return p.stdout, mapping
+@@ -143,12 +152,12 @@ def run_mafft_fasttree(proteins: Dict[str, str], timeout=1200):
+     with tempfile.TemporaryDirectory(prefix='bps_tree_') as td0:
+         td = Path(td0)
+         aln_safe, mapping = _run_mafft(proteins, td, timeout=timeout)
+-        p2 = subprocess.run(
++        p2 = runtime.run_guarded(
+             [fasttree, '-wag', '-gamma'],
+             input=aln_safe,
+-            capture_output=True,
+-            text=True,
+             timeout=timeout,
++            tool='fasttree',
++            mem_mb=runtime.child_memory_ceiling_mb(128),
+         )
+         if p2.returncode != 0 or '(' not in p2.stdout:
+             raise RuntimeError(p2.stderr.strip() or 'FastTree failed to produce a Newick tree.')
+@@ -222,7 +231,10 @@ def run_mafft_iqtree(proteins: Dict[str, str], bootstrap=1000, alrt=1000, thread
+             '--prefix', str(prefix),
+             '-redo',
+         ]
+-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
++        p = runtime.run_guarded(
++            cmd, timeout=timeout, tool='iqtree',
++            mem_mb=runtime.child_memory_ceiling_mb(256),
++        )
+         treefile = Path(str(prefix) + '.treefile')
+         report = Path(str(prefix) + '.iqtree')
+         logfile = Path(str(prefix) + '.log')
+diff --git a/modules/gdm_reference.py b/modules/gdm_reference.py
+index 7c89c7a..de2b173 100644
+--- a/modules/gdm_reference.py
++++ b/modules/gdm_reference.py
+@@ -16,10 +16,12 @@ from Bio import SeqIO
+ from Bio.Seq import Seq
+ 
+ from .gdm_common import fasta_text, norm_id
++from . import runtime
+ 
+ 
+ def _is_shared_cloud() -> bool:
+-    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
++    # Single source of truth; patchable name retained for existing tests.
++    return runtime.is_shared_cloud()
+ 
+ 
+ def _safe_miniprot_threads(threads: int) -> int:
+@@ -47,7 +49,14 @@ def reference_tool_status() -> dict:
+ 
+ 
+ def _run(cmd, timeout=900, cwd=None):
+-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
++    # Native reference tools run under a kernel memory/CPU ceiling so miniprot
++    # indexing a large genome cannot OOM-kill the shared worker. run_guarded
++    # automatically skips the address-space limit for the Go 'datasets' binary,
++    # which reserves large virtual memory at start-up.
++    p = runtime.run_guarded(
++        cmd, timeout=timeout, cwd=cwd,
++        mem_mb=runtime.child_memory_ceiling_mb(256),
++    )
+     if p.returncode:
+         msg = (p.stderr or p.stdout or '').strip()
+         raise RuntimeError(msg or f'Command failed: {" ".join(map(str, cmd))}')
+diff --git a/modules/gdm_structure.py b/modules/gdm_structure.py
+index b7c74f4..edca7d8 100644
+--- a/modules/gdm_structure.py
++++ b/modules/gdm_structure.py
+@@ -6,6 +6,7 @@ import numpy as np, pandas as pd
+ from Bio import Entrez, SeqIO
+ from Bio.Seq import Seq
+ from .gdm_common import versionless, norm_id
++from . import runtime
+ 
+ def est2genome_ready()->bool:return shutil.which('est2genome') is not None
+ 
+@@ -31,8 +32,9 @@ def est2genome_pair(gene:str,cds:str,genomic:str,timeout=180):
+     with tempfile.TemporaryDirectory(prefix='bps_est2genome_') as td:
+         td=Path(td); c=td/'cds.fa';g=td/'genomic.fa';o=td/'out.txt'
+         c.write_text(f'>{gene}\n{cds}\n');g.write_text(f'>{gene}_genomic\n{genomic}\n')
+-        p=subprocess.run(['est2genome','-estsequence',str(c),'-genomesequence',str(g),'-outfile',str(o),'-align','N','-auto'],
+-                         capture_output=True,text=True,timeout=timeout)
++        p=runtime.run_guarded(['est2genome','-estsequence',str(c),'-genomesequence',str(g),'-outfile',str(o),'-align','N','-auto'],
++                              timeout=timeout, tool='est2genome',
++                              mem_mb=runtime.child_memory_ceiling_mb(128))
+         if p.returncode or not o.exists():raise RuntimeError(p.stderr.strip() or 'est2genome failed')
+         raw=o.read_text(errors='replace')
+     exons=[];introns=[];strand='+'
+-- 
+2.43.0
