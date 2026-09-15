@@ -1,0 +1,34 @@
+name: Apply reviewed GDM patch series
+
+on:
+  push:
+    branches:
+      - fix/gdm-runtime-sandbox-claude-reviewed
+    paths:
+      - '.github/workflows/apply-gdm-patches.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply seven reviewed commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "BioProtein Studio automation"
+          git config user.email "actions@users.noreply.github.com"
+          for patch in .patches/*.patch; do
+            echo "Applying ${patch}"
+            git am "${patch}"
+          done
+          git push origin "HEAD:${GITHUB_REF_NAME}"
