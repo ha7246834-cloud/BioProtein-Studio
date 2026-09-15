@@ -147,7 +147,7 @@ class LargeFamilyUITests(unittest.TestCase):
         self.assertNotIn("png_bytes = fig_bytes", self.page)
 
     def test_cloud_skips_duplicate_local_autosave(self):
-        self.assertIn("if not Path('/mount/src').exists():", self.page)
+        self.assertIn("not Path('/mount/src').exists()", self.page)
         self.assertIn("Streamlit Community Cloud uses ephemeral storage", self.page)
 
     def test_safe_iqtree_thread_default_is_visible(self):

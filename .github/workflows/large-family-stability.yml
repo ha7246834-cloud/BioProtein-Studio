@@ -3,12 +3,15 @@ name: Large family stability
 on:
   pull_request:
     paths:
+      - 'modules/runtime.py'
       - 'modules/gdm_phylogeny.py'
       - 'modules/gdm_plot.py'
       - 'modules/gdm_cdd_meme.py'
       - 'modules/gdm_reference.py'
       - 'modules/gdm_structure.py'
       - 'pages/2_Gene_Structure_Domain_Motif.py'
+      - 'vendor/bin/meme'
+      - 'tests/test_runtime_sandbox.py'
       - 'tests/test_large_family_stability.py'
       - 'tests/test_cdd_meme_cloud_stability.py'
       - 'tests/test_gene_structure_performance.py'
@@ -20,12 +23,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
       - name: Install Python dependencies
         run: |
@@ -34,6 +41,7 @@ jobs:
       - name: Syntax check
         run: |
           python -m py_compile \
+            modules/runtime.py \
             modules/gdm_phylogeny.py \
             modules/gdm_plot.py \
             modules/gdm_cdd_meme.py \
@@ -45,6 +53,7 @@ jobs:
           MPLBACKEND: Agg
         run: |
           python -m unittest -v \
+            tests.test_runtime_sandbox \
             tests.test_large_family_stability \
             tests.test_cdd_meme_cloud_stability \
             tests.test_gene_structure_performance \

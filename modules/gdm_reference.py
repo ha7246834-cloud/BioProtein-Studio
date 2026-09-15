@@ -16,10 +16,12 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 
 from .gdm_common import fasta_text, norm_id
+from . import runtime
 
 
 def _is_shared_cloud() -> bool:
-    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
+    # Single source of truth; patchable name retained for existing tests.
+    return runtime.is_shared_cloud()
 
 
 def _safe_miniprot_threads(threads: int) -> int:
@@ -47,7 +49,14 @@ def reference_tool_status() -> dict:
 
 
 def _run(cmd, timeout=900, cwd=None):
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    # Native reference tools run under a kernel memory/CPU ceiling so miniprot
+    # indexing a large genome cannot OOM-kill the shared worker. run_guarded
+    # automatically skips the address-space limit for the Go 'datasets' binary,
+    # which reserves large virtual memory at start-up.
+    p = runtime.run_guarded(
+        cmd, timeout=timeout, cwd=cwd,
+        mem_mb=runtime.child_memory_ceiling_mb(256),
+    )
     if p.returncode:
         msg = (p.stderr or p.stdout or '').strip()
         raise RuntimeError(msg or f'Command failed: {" ".join(map(str, cmd))}')

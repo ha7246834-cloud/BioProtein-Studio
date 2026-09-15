@@ -22,7 +22,7 @@ class Est2GenomeFastPathTests(unittest.TestCase):
         cds = 'ATGGCCGCCGCC'
         genomic = 'TTTT' + cds + 'AAAA'
         with patch.object(gs, 'est2genome_ready', return_value=True), \
-             patch.object(gs.subprocess, 'run', side_effect=AssertionError('est2genome should not launch')):
+             patch.object(gs.runtime, 'run_guarded', side_effect=AssertionError('est2genome should not launch')):
             df, qc, raw = gs.est2genome_pair('Gene1', cds, genomic)
         self.assertEqual(qc['method'], 'Exact contiguous match')
         self.assertEqual(qc['status'], 'PASS')
@@ -34,7 +34,7 @@ class Est2GenomeFastPathTests(unittest.TestCase):
         cds = 'ATGGCCGCCGCC'
         from Bio.Seq import Seq
         genomic = 'TTTT' + str(Seq(cds).reverse_complement()) + 'AAAA'
-        with patch.object(gs.subprocess, 'run', side_effect=AssertionError('est2genome should not launch')):
+        with patch.object(gs.runtime, 'run_guarded', side_effect=AssertionError('est2genome should not launch')):
             df, qc, _ = gs.est2genome_pair('Gene2', cds, genomic)
         self.assertEqual(qc['status'], 'PASS')
         self.assertEqual(df.iloc[0]['strand'], '-')

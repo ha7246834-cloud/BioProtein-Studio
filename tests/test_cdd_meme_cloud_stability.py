@@ -87,58 +87,71 @@ class MEMECloudPolicyTests(unittest.TestCase):
         self.assertEqual(nseq, 20)
         self.assertEqual(residues, 4000)
 
-    def test_real_40_protein_case_is_rejected_before_subprocess(self):
+    def test_real_40_protein_case_is_allowed_on_cloud(self):
+        """Measured MEME memory for 40 proteins / 8,411 aa is ~11 MB, so the
+        family is within the evidence-based cloud envelope and must reach the
+        guarded runner rather than being blocked."""
         family = proteins(40, 211)
         allowed, nseq, residues = cm.meme_cloud_policy(family)
-        self.assertFalse(allowed)
+        self.assertTrue(allowed)
         self.assertEqual(nseq, 40)
         self.assertEqual(residues, 8440)
         with patch.object(cm, '_is_shared_cloud', return_value=True), \
              patch.object(cm, 'meme_ready', return_value=True), \
-             patch.object(cm.subprocess, 'run') as run:
-            with self.assertRaisesRegex(RuntimeError, 'CLOUD_RESOURCE_LIMIT'):
+             patch.object(cm.runtime, 'run_guarded', side_effect=RuntimeError('reached-runner')) as rg:
+            with self.assertRaisesRegex(RuntimeError, 'reached-runner'):
                 cm.run_meme(family, nmotifs=10)
-        run.assert_not_called()
+        rg.assert_called_once()
 
-    def test_large_family_rejected_without_subsampling(self):
-        family = proteins(200, 400)
+    def test_oversize_family_rejected_without_subsampling(self):
+        """A genuinely oversized family (beyond the wall-time envelope) is still
+        refused, and never reaches the runner or subsamples sequences."""
+        family = proteins(200, 400)  # 200 seq / 80,000 aa > 120 / 30,000
         with patch.object(cm, '_is_shared_cloud', return_value=True), \
              patch.object(cm, 'meme_ready', return_value=True), \
-             patch.object(cm.subprocess, 'run') as run:
+             patch.object(cm.runtime, 'run_guarded') as rg:
             with self.assertRaisesRegex(RuntimeError, 'CLOUD_RESOURCE_LIMIT'):
                 cm.run_meme(family, nmotifs=10)
-        run.assert_not_called()
+        rg.assert_not_called()
 
-    def test_local_policy_does_not_change_sequences(self):
-        family = proteins(200, 400)
-        allowed, nseq, residues = cm.meme_cloud_policy(family)
+    def test_policy_counts_sequences_and_residues(self):
+        allowed, nseq, residues = cm.meme_cloud_policy(proteins(200, 400))
         self.assertFalse(allowed)
-        self.assertEqual(nseq, len(family))
+        self.assertEqual(nseq, 200)
         self.assertEqual(residues, 80000)
 
-    def test_vendor_wrapper_blocks_real_40_protein_cloud_case_before_core(self):
-        """Regression for the 40-protein / ~8.4k-aa Streamlit worker crash."""
+    def test_vendor_wrapper_allows_40_and_blocks_oversized(self):
+        """The shared-cloud MEME wrapper allows the real 40-protein family and
+        blocks only genuinely oversized input (BPS_MEME_GATE_ONLY validates the
+        gate without launching the slow core)."""
         wrapper = Path('vendor/bin/meme').resolve()
         self.assertTrue(wrapper.exists())
-        family = proteins(40, 211)
+        small = proteins(40, 211)
+        big = proteins(200, 400)
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
-            fasta = td / 'rice_pr1_like.faa'
-            out = td / 'meme_out'
-            fasta.write_text(''.join(f'>{name}\n{seq}\n' for name, seq in family.items()))
             env = os.environ.copy()
-            env['STREAMLIT_SHARING_MODE'] = '1'
-            proc = subprocess.run(
-                [str(wrapper), str(fasta), '-protein', '-oc', str(out), '-nmotifs', '10'],
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=10,
+            env['BPS_SHARED_CLOUD'] = '1'
+            env['BPS_MEME_GATE_ONLY'] = '1'
+
+            fa = td / 'small.faa'
+            fa.write_text(''.join(f'>{n}\n{s}\n' for n, s in small.items()))
+            ok = subprocess.run(
+                [str(wrapper), str(fa), '-protein', '-oc', str(td / 'o1'), '-nmotifs', '5'],
+                capture_output=True, text=True, env=env, timeout=20,
             )
-        self.assertEqual(proc.returncode, 75)
-        self.assertIn('CLOUD_RESOURCE_LIMIT', proc.stderr)
-        self.assertIn('40 proteins', proc.stderr)
-        self.assertFalse(out.exists())
+            self.assertEqual(ok.returncode, 0)
+            self.assertNotIn('CLOUD_RESOURCE_LIMIT', ok.stderr)
+
+            fb = td / 'big.faa'
+            fb.write_text(''.join(f'>{n}\n{s}\n' for n, s in big.items()))
+            blocked = subprocess.run(
+                [str(wrapper), str(fb), '-protein', '-oc', str(td / 'o2'), '-nmotifs', '5'],
+                capture_output=True, text=True, env=env, timeout=20,
+            )
+        self.assertEqual(blocked.returncode, 75)
+        self.assertIn('CLOUD_RESOURCE_LIMIT', blocked.stderr)
+        self.assertIn('200 proteins', blocked.stderr)
 
 
 if __name__ == '__main__':

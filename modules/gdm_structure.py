@@ -6,6 +6,7 @@ import numpy as np, pandas as pd
 from Bio import Entrez, SeqIO
 from Bio.Seq import Seq
 from .gdm_common import versionless, norm_id
+from . import runtime
 
 def est2genome_ready()->bool:return shutil.which('est2genome') is not None
 
@@ -31,8 +32,9 @@ def est2genome_pair(gene:str,cds:str,genomic:str,timeout=180):
     with tempfile.TemporaryDirectory(prefix='bps_est2genome_') as td:
         td=Path(td); c=td/'cds.fa';g=td/'genomic.fa';o=td/'out.txt'
         c.write_text(f'>{gene}\n{cds}\n');g.write_text(f'>{gene}_genomic\n{genomic}\n')
-        p=subprocess.run(['est2genome','-estsequence',str(c),'-genomesequence',str(g),'-outfile',str(o),'-align','N','-auto'],
-                         capture_output=True,text=True,timeout=timeout)
+        p=runtime.run_guarded(['est2genome','-estsequence',str(c),'-genomesequence',str(g),'-outfile',str(o),'-align','N','-auto'],
+                              timeout=timeout, tool='est2genome',
+                              mem_mb=runtime.child_memory_ceiling_mb(128))
         if p.returncode or not o.exists():raise RuntimeError(p.stderr.strip() or 'est2genome failed')
         raw=o.read_text(errors='replace')
     exons=[];introns=[];strand='+'

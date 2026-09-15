@@ -15,6 +15,7 @@ from Bio.Align import PairwiseAligner, substitution_matrices
 from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
 
 from .gdm_common import fasta_text
+from . import runtime
 
 
 # Workstation/local Auto policy.
@@ -40,7 +41,9 @@ def _which_iqtree():
 
 
 def _is_shared_cloud():
-    return bool(os.environ.get('STREAMLIT_SHARING_MODE')) or Path('/mount/src').exists()
+    # Delegates to the single source of truth in modules.runtime. Kept as a
+    # module-level name so existing tests can patch gdm_phylogeny._is_shared_cloud.
+    return runtime.is_shared_cloud()
 
 
 def external_phylogeny_ready():
@@ -125,7 +128,13 @@ def _run_mafft(proteins: Dict[str, str], td: Path, timeout=900):
         cmd += ['--auto']
     cmd.append(str(fasta))
 
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    # MAFFT --auto selects L-INS-i for small families, whose consistency library
+    # is the largest memory allocation in the tree stage. Run under a kernel
+    # memory ceiling so a dense family cannot OOM-kill the shared worker.
+    p = runtime.run_guarded(
+        cmd, timeout=timeout, tool='mafft',
+        mem_mb=runtime.child_memory_ceiling_mb(128),
+    )
     if p.returncode != 0 or not p.stdout.strip():
         raise RuntimeError(p.stderr.strip() or 'MAFFT failed to produce an alignment.')
     return p.stdout, mapping
@@ -143,12 +152,12 @@ def run_mafft_fasttree(proteins: Dict[str, str], timeout=1200):
     with tempfile.TemporaryDirectory(prefix='bps_tree_') as td0:
         td = Path(td0)
         aln_safe, mapping = _run_mafft(proteins, td, timeout=timeout)
-        p2 = subprocess.run(
+        p2 = runtime.run_guarded(
             [fasttree, '-wag', '-gamma'],
             input=aln_safe,
-            capture_output=True,
-            text=True,
             timeout=timeout,
+            tool='fasttree',
+            mem_mb=runtime.child_memory_ceiling_mb(128),
         )
         if p2.returncode != 0 or '(' not in p2.stdout:
             raise RuntimeError(p2.stderr.strip() or 'FastTree failed to produce a Newick tree.')
@@ -222,7 +231,10 @@ def run_mafft_iqtree(proteins: Dict[str, str], bootstrap=1000, alrt=1000, thread
             '--prefix', str(prefix),
             '-redo',
         ]
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = runtime.run_guarded(
+            cmd, timeout=timeout, tool='iqtree',
+            mem_mb=runtime.child_memory_ceiling_mb(256),
+        )
         treefile = Path(str(prefix) + '.treefile')
         report = Path(str(prefix) + '.iqtree')
         logfile = Path(str(prefix) + '.log')
