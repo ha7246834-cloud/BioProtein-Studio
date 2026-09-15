@@ -538,7 +538,7 @@ with auto:
             r['package'] = b''
         # Streamlit Community Cloud uses ephemeral storage. Avoid writing duplicate
         # ZIP archives on every run there; local/WSL users still receive autosave.
-        if r.get('package') and not Path('/mount/src').exists():
+        if not Path('/mount/src').exists() and r.get('package'):
             try:
                 outdir = Path.cwd() / 'results'
                 outdir.mkdir(parents=True, exist_ok=True)
