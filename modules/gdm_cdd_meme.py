@@ -371,12 +371,18 @@ def run_meme(proteins, nmotifs=10, minw=6, maxw=50, model='zoops', timeout=600):
         ]
         effective_timeout = min(int(timeout), 420) if _is_shared_cloud() else int(timeout)
         # Run under an enforced memory/CPU ceiling in its own process group so a
-        # pathological input cannot OOM-kill the shared Streamlit worker; a
-        # kernel kill surfaces as ChildResourceError (caught by the caller).
-        with runtime.stage('meme', proteins=len(proteins), nmotifs=int(nmotifs), maxw=int(maxw)):
-            p = runtime.run_guarded(
-                cmd, timeout=effective_timeout, tool='meme',
-                mem_mb=runtime.child_memory_ceiling_mb(MEME_MEMORY_FLOOR_MB),
+        # pathological input cannot OOM-kill the shared Streamlit worker. A kernel
+        # kill (memory/CPU/timeout) is reported as a resource-safety event so the
+        # caller preserves upstream results instead of failing hard.
+        try:
+            with runtime.stage('meme', proteins=len(proteins), nmotifs=int(nmotifs), maxw=int(maxw)):
+                p = runtime.run_guarded(
+                    cmd, timeout=effective_timeout, tool='meme',
+                    mem_mb=runtime.child_memory_ceiling_mb(MEME_MEMORY_FLOOR_MB),
+                )
+        except ChildResourceError as e:
+            raise RuntimeError(
+                'CLOUD_RESOURCE_LIMIT: ' + str(e) + ' The sequences were not subsampled.'
             )
         if p.returncode:
             raise RuntimeError(p.stderr.strip() or 'MEME failed')
