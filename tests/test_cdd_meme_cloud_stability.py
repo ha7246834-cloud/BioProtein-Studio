@@ -153,6 +153,28 @@ class MEMECloudPolicyTests(unittest.TestCase):
         self.assertIn('CLOUD_RESOURCE_LIMIT', blocked.stderr)
         self.assertIn('200 proteins', blocked.stderr)
 
+    def test_vendor_wrapper_stages_embedded_prefix_assets(self):
+        """The portable MEME core has a compiled installation prefix. Ensure the
+        wrapper stages prior30.plib/template.eps at that exact prefix before the
+        core is launched, preventing the production prior-library failure."""
+        wrapper = Path('vendor/bin/meme').resolve()
+        self.assertTrue(wrapper.exists())
+        family = proteins(3, 80)
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            fa = td / 'tiny.faa'
+            fa.write_text(''.join(f'>{n}\n{s}\n' for n, s in family.items()))
+            env = os.environ.copy()
+            env['BPS_MEME_PREFIX_CHECK_ONLY'] = '1'
+            proc = subprocess.run(
+                [str(wrapper), str(fa), '-protein', '-oc', str(td / 'out'), '-nmotifs', '3'],
+                capture_output=True, text=True, env=env, timeout=20,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        prefix = Path('/tmp/bps_meme_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+        self.assertTrue((prefix / 'share/meme-5.5.9/prior30.plib').is_file())
+        self.assertTrue((prefix / 'share/meme-5.5.9/template.eps').is_file())
+
 
 if __name__ == '__main__':
     unittest.main()
