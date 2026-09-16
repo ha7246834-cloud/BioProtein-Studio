@@ -5,54 +5,124 @@ import pandas as pd
 import streamlit as st
 
 from modules.gdm_circular import circular_phylogeny_figure
-from modules.gdm_plot import fig_bytes
+from modules.gdm_clade_validation import clade_sequence_concordance
+from modules.gdm_common import parse_fasta
+from modules.gdm_phylogeny import build_phylogeny
+from modules.gdm_plot import (
+    architecture,
+    combined,
+    fig_bytes,
+    gene_structure,
+    missing_structure_figure,
+)
 from modules.gdm_style import STYLE_PRESETS, style_from_preset
 
 
 st.set_page_config(page_title='Circular Phylogeny | BioProtein Studio', page_icon='🌳', layout='wide')
-st.title('🌳 Circular Phylogeny & Automatic Clade View')
+st.title('🌳 Circular Phylogeny & Sequence-Supported Clade View')
 st.caption(
-    'Gene-family-agnostic circular tree visualization with topology-derived clade colours, '
-    'branch lengths, support labels, and publication-ready export.'
+    'Build a circular tree directly from protein FASTA or reuse the full GDM analysis. '
+    'Automatic clades can be cross-checked against independent unsupervised sequence-distance clustering.'
 )
 
 r = st.session_state.get('gdm_result') or {}
 session_tree = str(r.get('tree_text', '') or '').strip()
+session_alignment = str(r.get('alignment_text', '') or '').strip()
 session_order = list(r.get('order') or [])
 session_method = str(r.get('phylogeny_method', '') or '').strip()
 session_qc = r.get('phylogeny_qc')
 
 st.info(
-    'The circular plot does not invent IQ-TREE statistics. A FastTree tree displays FastTree local support. '
-    'An IQ-TREE tree/report can display its SH-aLRT/UFBoot support and model evidence. '
-    'Automatic clade colours are topology-derived display groups and must not be presented as validated '
-    'functional/evolutionary subgroups without biological review.'
+    'Clade evidence is kept method-correct. FastTree local support is not relabelled as IQ-TREE support. '
+    'The optional ML concordance is an independent unsupervised k-medoids check of MAFFT sequence distances. '
+    'It can strengthen or challenge an automatic topology partition, but it is not a substitute for '
+    'reference-gene, functional, taxonomic, or experimental validation of biological subgroups.'
+)
+
+st.caption(
+    'Domains and motifs can be discovered from protein sequences. Exact exon–intron gene structure cannot be '
+    'derived from protein sequence alone; it requires CDS/genomic sequence, annotation, or a resolvable reference genome.'
 )
 
 source_options = []
 if session_tree:
-    source_options.append('Latest GDM analysis')
-source_options.append('Upload / paste Newick')
+    source_options.append('Latest full GDM analysis')
+source_options += ['Protein FASTA → automatic tree', 'Upload / paste Newick']
 source = st.radio('Tree source', source_options, horizontal=True)
 
 uploaded_tree = None
 pasted_tree = ''
 iqtree_report = ''
-method_label = session_method
-order = session_order if source == 'Latest GDM analysis' else None
+method_label = ''
+order = None
+alignment_text = ''
+tree_text = ''
+phylo_qc = pd.DataFrame()
 
-if source == 'Latest GDM analysis':
+if source == 'Latest full GDM analysis':
     tree_text = session_tree
-    if isinstance(session_qc, pd.DataFrame) and not session_qc.empty:
+    alignment_text = session_alignment
+    order = session_order or None
+    method_label = session_method
+    phylo_qc = session_qc if isinstance(session_qc, pd.DataFrame) else pd.DataFrame()
+    if not phylo_qc.empty:
         st.markdown('**Inference evidence from the latest GDM run**')
-        st.dataframe(session_qc, width='stretch', hide_index=True)
+        st.dataframe(phylo_qc, width='stretch', hide_index=True)
     if 'FastTree' in method_label:
         st.warning(
             'Current tree is a Cloud screening tree (MAFFT + FastTree). Branch lengths and FastTree local '
-            'support are preserved, but ModelFinder, SH-aLRT and ultrafast bootstrap were not computed.'
+            'support are preserved. ModelFinder, SH-aLRT and ultrafast bootstrap were not computed.'
         )
     elif 'IQ-TREE' in method_label:
         st.success('Current tree contains IQ-TREE publication-oriented inference evidence from the GDM run.')
+
+elif source == 'Protein FASTA → automatic tree':
+    st.markdown('### Protein input')
+    protein_up = st.file_uploader(
+        'Upload protein FASTA', type=['fa', 'fasta', 'faa', 'txt'], key='circular_protein_upload'
+    )
+    protein_paste = st.text_area(
+        'Or paste protein FASTA', height=160, key='circular_protein_paste',
+        placeholder='>Gene1\nM...\n>Gene2\nM...'
+    )
+    protein_text = (
+        protein_up.getvalue().decode('utf-8', 'replace') if protein_up else protein_paste
+    )
+    if st.button('Build tree from protein sequences', type='primary', width='stretch'):
+        try:
+            proteins = parse_fasta(protein_text, 'protein')
+            if len(proteins) < 3:
+                raise ValueError('At least three protein sequences are required for phylogenetic inference.')
+            with st.spinner(f'Aligning and inferring phylogeny for {len(proteins)} proteins...'):
+                auto_result = build_phylogeny(proteins, mode='auto')
+            auto_result['input_ids'] = list(proteins)
+            st.session_state.circular_auto_result = auto_result
+        except Exception as exc:
+            st.error(f'Automatic protein phylogeny failed: {exc}')
+
+    auto_result = st.session_state.get('circular_auto_result') or {}
+    tree_text = str(auto_result.get('tree_text', '') or '').strip()
+    alignment_text = str(auto_result.get('alignment_text', '') or '').strip()
+    order = list(auto_result.get('input_ids') or []) or None
+    method_label = str(auto_result.get('method', '') or '')
+    phylo_qc = auto_result.get('qc') if isinstance(auto_result.get('qc'), pd.DataFrame) else pd.DataFrame()
+    if tree_text:
+        if not phylo_qc.empty:
+            st.dataframe(phylo_qc, width='stretch', hide_index=True)
+        warning = str(auto_result.get('warning', '') or '').strip()
+        if warning:
+            st.warning(warning)
+        st.success(f'Automatic tree ready: {method_label or "phylogeny inferred"}.')
+        st.info(
+            'This quick route builds the phylogeny and sequence-cluster evidence only. '
+            'Use the full GDM page for NCBI CDD domains, MEME motifs and validated gene structure in the same family.'
+        )
+        st.page_link(
+            'pages/2_Gene_Structure_Domain_Motif.py',
+            label='🧬 Open full Gene Structure + Domains + Motifs analysis',
+            icon='🧬',
+        )
+
 else:
     c1, c2 = st.columns(2)
     with c1:
@@ -78,15 +148,28 @@ else:
     else:
         method_label = 'Uploaded Newick (support semantics user-supplied)'
 
+    aligned_up = st.file_uploader(
+        'Optional aligned protein FASTA for independent sequence-cluster concordance',
+        type=['fa', 'fasta', 'faa', 'txt'],
+        key='circular_alignment_upload',
+        help='Use the MAFFT alignment corresponding to this tree. Without an alignment, the tree can still be plotted but ML concordance is not claimed.',
+    )
+    if aligned_up:
+        alignment_text = aligned_up.getvalue().decode('utf-8', 'replace')
+
 if not tree_text:
-    st.warning('Run the GDM analysis first or provide a Newick tree to build the circular figure.')
+    st.warning('Provide protein FASTA, run the full GDM analysis, or supply a Newick tree.')
     st.stop()
 
-st.subheader('Circular tree options')
+st.subheader('Circular tree & clade evidence options')
 a, b, c, d = st.columns(4)
 with a:
-    group_choice = st.selectbox('Automatic clade groups', ['Auto'] + list(range(2, 13)))
-    target_groups = None if group_choice == 'Auto' else int(group_choice)
+    group_choice = st.selectbox(
+        'Automatic clade groups',
+        ['Data-driven ML Auto'] + list(range(2, 13)),
+        help='Data-driven Auto tests several monophyletic topology partitions and selects the one most concordant with independent sequence-distance clustering when an alignment is available.'
+    )
+    requested_groups = None if group_choice == 'Data-driven ML Auto' else int(group_choice)
 with b:
     midpoint = st.checkbox('Midpoint-root for display', value=False)
 with c:
@@ -101,12 +184,45 @@ with e1:
 with e2:
     style['line_width'] = st.slider('Branch line width', 0.5, 2.5, float(style['line_width']), 0.1)
 
+validation = None
+plot_groups = requested_groups
+if alignment_text:
+    try:
+        validation = clade_sequence_concordance(
+            tree_text,
+            alignment_text,
+            target_groups=requested_groups,
+        )
+        if requested_groups is None:
+            plot_groups = int(validation['recommended_groups'])
+        st.markdown('### Independent sequence-cluster concordance')
+        st.dataframe(validation['summary'], width='stretch', hide_index=True)
+        if str(validation['status']).startswith('STRONG'):
+            st.success(
+                'Tree partition and unsupervised sequence-distance clustering show strong computational concordance.'
+            )
+        elif str(validation['status']).startswith('MODERATE'):
+            st.info(
+                'Tree partition and unsupervised sequence-distance clustering show moderate computational concordance.'
+            )
+        else:
+            st.warning(
+                'Topology and independent sequence clustering are not strongly concordant. Treat automatic clades as REVIEW.'
+            )
+    except Exception as exc:
+        st.warning(f'Sequence-cluster concordance was not assigned: {exc}')
+else:
+    st.warning(
+        'No matching protein alignment is available, so automatic clades are topology-only. '
+        'Provide protein FASTA through the automatic route or an aligned FASTA to enable independent ML concordance.'
+    )
+
 try:
-    fig, clade_table = circular_phylogeny_figure(
+    fig, topology_clade_table = circular_phylogeny_figure(
         tree_text,
         order=order or None,
         style=style,
-        target_groups=target_groups,
+        target_groups=plot_groups,
         midpoint_root=midpoint,
         show_support=show_support,
         method_label=method_label,
@@ -118,20 +234,86 @@ except Exception as exc:
 st.subheader('Automatic circular clade figure')
 st.pyplot(fig, width='stretch')
 
-st.markdown('**Topology-derived clade table**')
-st.dataframe(clade_table, width='stretch', hide_index=True)
-st.download_button(
-    'Download clade membership CSV',
-    clade_table.to_csv(index=False),
-    'automatic_topology_clades.csv',
-    'text/csv',
-    width='stretch',
-)
+if validation is not None:
+    st.markdown('**Clade evidence table**')
+    evidence_table = validation['clade_table']
+    st.dataframe(evidence_table, width='stretch', hide_index=True)
+    st.download_button(
+        'Download sequence-supported clade evidence CSV',
+        evidence_table.to_csv(index=False),
+        'sequence_supported_clade_evidence.csv',
+        'text/csv',
+        width='stretch',
+    )
+    with st.expander('Per-protein topology vs ML-cluster assignment'):
+        st.dataframe(validation['member_table'], width='stretch', hide_index=True)
+else:
+    st.markdown('**Topology-derived clade table**')
+    st.dataframe(topology_clade_table, width='stretch', hide_index=True)
+    st.download_button(
+        'Download topology clade membership CSV',
+        topology_clade_table.to_csv(index=False),
+        'automatic_topology_clades.csv',
+        'text/csv',
+        width='stretch',
+    )
 
 st.caption(
-    'Auto Clade A/B/C… labels are display partitions obtained only from tree topology. '
-    'Rename/interpret clades biologically only after reference-gene and support-based validation.'
+    'ML-CONCORDANT means the monophyletic topology partition is independently recovered by unsupervised '
+    'sequence-distance clustering. It does not by itself establish a named biological subgroup. '
+    'For publication subgroup claims, combine this evidence with branch support, curated references, '
+    'domains/motifs, species context and other relevant biology.'
 )
+
+if source == 'Latest full GDM analysis' and r:
+    st.divider()
+    st.subheader('🧬 Full GDM evidence for the same protein family')
+    st.caption(
+        'The circular tree is only one view. The same completed run still contains gene-structure, '
+        'CDD-domain and MEME-motif evidence below when those analyses produced results.'
+    )
+    evidence_view = st.radio(
+        'Evidence view',
+        ['Gene Structure', 'Domains', 'Motifs', 'Integrated Tree + Structure + Motifs + Domains'],
+        horizontal=True,
+        key='circular_gdm_evidence_view',
+    )
+    gdm_order = session_order or order or []
+    gdm_fig = None
+    gdm_table = pd.DataFrame()
+    structures = r.get('gene_structures') if isinstance(r.get('gene_structures'), pd.DataFrame) else pd.DataFrame()
+    domains = r.get('domains') if isinstance(r.get('domains'), pd.DataFrame) else pd.DataFrame()
+    motifs = r.get('motifs') if isinstance(r.get('motifs'), pd.DataFrame) else pd.DataFrame()
+
+    if evidence_view == 'Gene Structure':
+        gdm_fig = gene_structure(structures, gdm_order, style) if not structures.empty else missing_structure_figure(gdm_order, style)
+        gdm_table = r.get('gene_qc') if isinstance(r.get('gene_qc'), pd.DataFrame) else pd.DataFrame()
+    elif evidence_view == 'Domains':
+        if domains.empty:
+            st.warning('No retained CDD domain results are available in this run.')
+        else:
+            gdm_fig = architecture(domains, gdm_order, 'domain', 'Conserved Domain Architecture', style=style)
+            gdm_table = r.get('domain_qc') if isinstance(r.get('domain_qc'), pd.DataFrame) else pd.DataFrame()
+    elif evidence_view == 'Motifs':
+        if motifs.empty:
+            st.warning('No MEME motif results are available in this run.')
+        else:
+            gdm_fig = architecture(motifs, gdm_order, 'motif', 'Conserved Motif Architecture', style=style)
+            gdm_table = r.get('motif_qc') if isinstance(r.get('motif_qc'), pd.DataFrame) else pd.DataFrame()
+    else:
+        gdm_fig = combined(tree_text, structures, domains, motifs, gdm_order, style)
+
+    if gdm_fig is not None:
+        st.pyplot(gdm_fig, width='stretch')
+        if not gdm_table.empty:
+            st.dataframe(gdm_table, width='stretch', hide_index=True)
+        plt.close(gdm_fig)
+
+    st.page_link(
+        'pages/2_Gene_Structure_Domain_Motif.py',
+        label='🧬 Open full analysis controls / rerun CDD, MEME or gene structure',
+        icon='🧬',
+    )
 
 st.subheader('Publication export')
 fmt = st.selectbox('Figure format', ['SVG', 'PDF', 'PNG', 'TIFF'], index=0)
@@ -148,14 +330,15 @@ if st.button('Prepare circular tree download', type='primary', width='stretch'):
     st.download_button(
         f'Download circular phylogeny ({fmt})',
         data,
-        f'circular_phylogeny_auto_clades.{out_fmt}',
+        f'circular_phylogeny_sequence_supported.{out_fmt}',
         mime,
         width='stretch',
     )
 
-if source == 'Upload / paste Newick':
-    st.download_button('Download supplied Newick', tree_text, 'tree_used_for_circular_plot.nwk', 'text/plain')
-    if iqtree_report:
-        st.download_button('Download supplied IQ-TREE report', iqtree_report, 'iqtree_report.txt', 'text/plain')
+st.download_button('Download Newick used for circular plot', tree_text, 'tree_used_for_circular_plot.nwk', 'text/plain')
+if alignment_text:
+    st.download_button('Download alignment used for ML concordance', alignment_text, 'alignment_used_for_clade_concordance.fasta', 'text/plain')
+if iqtree_report:
+    st.download_button('Download supplied IQ-TREE report', iqtree_report, 'iqtree_report.txt', 'text/plain')
 
 plt.close(fig)

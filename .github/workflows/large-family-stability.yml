@@ -7,6 +7,7 @@ on:
       - 'modules/gdm_phylogeny.py'
       - 'modules/gdm_plot.py'
       - 'modules/gdm_circular.py'
+      - 'modules/gdm_clade_validation.py'
       - 'modules/gdm_cdd_meme.py'
       - 'modules/gdm_reference.py'
       - 'modules/gdm_structure.py'
@@ -16,6 +17,7 @@ on:
       - 'tests/test_runtime_sandbox.py'
       - 'tests/test_large_family_stability.py'
       - 'tests/test_circular_phylogeny.py'
+      - 'tests/test_clade_validation.py'
       - 'tests/test_cdd_meme_cloud_stability.py'
       - 'tests/test_gene_structure_performance.py'
       - 'tests/test_cloud_preflight_ui.py'
@@ -48,6 +50,7 @@ jobs:
             modules/gdm_phylogeny.py \
             modules/gdm_plot.py \
             modules/gdm_circular.py \
+            modules/gdm_clade_validation.py \
             modules/gdm_cdd_meme.py \
             modules/gdm_reference.py \
             modules/gdm_structure.py \
@@ -61,6 +64,7 @@ jobs:
             tests.test_runtime_sandbox \
             tests.test_large_family_stability \
             tests.test_circular_phylogeny \
+            tests.test_clade_validation \
             tests.test_cdd_meme_cloud_stability \
             tests.test_gene_structure_performance \
             tests.test_cloud_preflight_ui \
