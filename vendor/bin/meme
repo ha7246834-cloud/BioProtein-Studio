@@ -42,15 +42,20 @@ if [ "$IS_CLOUD" = "1" ]; then
   ulimit -v 900000 2>/dev/null || true
 fi
 
-# Test/diagnostic hook: validate the gate without launching the (slow) core.
+# Test/diagnostic hook: validate the size gate without launching the core.
 if [ "${BPS_MEME_GATE_ONLY:-}" = "1" ]; then
   exit 0
 fi
 
-# Isolated per-invocation runtime tree (was a fixed /tmp path that collided
-# across concurrent runs and never got cleaned up).
-RUNTIME="$(mktemp -d "${TMPDIR:-/tmp}/bps_meme.XXXXXXXX")"
-trap 'rm -rf "$RUNTIME"' EXIT INT TERM
+# IMPORTANT: this portable MEME core was built with this exact installation
+# prefix embedded in the binary. The core resolves prior30.plib and template.eps
+# from this path at runtime, so replacing it with a random mktemp directory makes
+# motif discovery fail with "Can't find prior library .../prior30.plib".
+#
+# The files staged here are immutable support assets. Individual MEME outputs are
+# still written to the caller-provided -oc directory, so sharing this read-only
+# compatibility prefix across sessions does not mix scientific results.
+RUNTIME="/tmp/bps_meme_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 mkdir -p \
   "$RUNTIME/bin" \
@@ -74,12 +79,16 @@ chmod 755 "$RUNTIME/libexec/meme-5.5.9/meme_xml_to_html"
 GS="$(command -v gs 2>/dev/null || command -v true)"
 ln -sf "$GS" "$RUNTIME/bin/gs"
 
-# The vendored meme_xml_to_html/gs stubs live in RUNTIME; expose them on PATH so
-# the core's post-processing finds them. BioProtein Studio consumes meme.xml
-# directly, so HTML/logo conversion is intentionally a no-op.
+# Expose the compatibility helpers on PATH. Scientific MEME output remains in
+# the invocation-specific -oc directory created by modules.gdm_cdd_meme.
 PATH="$RUNTIME/bin:$RUNTIME/libexec/meme-5.5.9:$PATH"
 export PATH
 
-# Not exec: keep this shell as parent so the EXIT trap cleans up RUNTIME.
-"$CORE" "$@"
-exit $?
+# Diagnostic hook used by CI to verify the embedded-prefix assets are staged.
+if [ "${BPS_MEME_PREFIX_CHECK_ONLY:-}" = "1" ]; then
+  test -r "$RUNTIME/share/meme-5.5.9/prior30.plib"
+  test -r "$RUNTIME/share/meme-5.5.9/template.eps"
+  exit 0
+fi
+
+exec "$CORE" "$@"
