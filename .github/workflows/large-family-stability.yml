@@ -6,13 +6,16 @@ on:
       - 'modules/runtime.py'
       - 'modules/gdm_phylogeny.py'
       - 'modules/gdm_plot.py'
+      - 'modules/gdm_circular.py'
       - 'modules/gdm_cdd_meme.py'
       - 'modules/gdm_reference.py'
       - 'modules/gdm_structure.py'
       - 'pages/2_Gene_Structure_Domain_Motif.py'
+      - 'pages/3_Circular_Phylogeny.py'
       - 'vendor/bin/meme'
       - 'tests/test_runtime_sandbox.py'
       - 'tests/test_large_family_stability.py'
+      - 'tests/test_circular_phylogeny.py'
       - 'tests/test_cdd_meme_cloud_stability.py'
       - 'tests/test_gene_structure_performance.py'
       - 'tests/test_cloud_preflight_ui.py'
@@ -44,10 +47,12 @@ jobs:
             modules/runtime.py \
             modules/gdm_phylogeny.py \
             modules/gdm_plot.py \
+            modules/gdm_circular.py \
             modules/gdm_cdd_meme.py \
             modules/gdm_reference.py \
             modules/gdm_structure.py \
-            pages/2_Gene_Structure_Domain_Motif.py
+            pages/2_Gene_Structure_Domain_Motif.py \
+            pages/3_Circular_Phylogeny.py
       - name: Run stability tests
         env:
           MPLBACKEND: Agg
@@ -55,6 +60,7 @@ jobs:
           python -m unittest -v \
             tests.test_runtime_sandbox \
             tests.test_large_family_stability \
+            tests.test_circular_phylogeny \
             tests.test_cdd_meme_cloud_stability \
             tests.test_gene_structure_performance \
             tests.test_cloud_preflight_ui \
