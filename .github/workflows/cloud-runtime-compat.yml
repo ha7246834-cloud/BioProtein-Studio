@@ -43,12 +43,12 @@ jobs:
           pip install -r requirements.txt
       - name: Compile application
         run: |
-          python -m py_compile app.py pages/2_Gene_Structure_Domain_Motif.py modules/*.py
+          python -m py_compile app.py pages/*.py modules/*.py
       - name: Streamlit AppTest smoke
         env:
           MPLBACKEND: Agg
         run: |
-          python -m unittest -v tests.test_streamlit_gdm_smoke
+          python -m unittest -v tests.test_streamlit_gdm_smoke tests.test_circular_phylogeny
       - name: Main app HTTP health
         run: |
           python -m streamlit run app.py --server.headless=true --server.port=8511 > /tmp/bps-main.log 2>&1 &
@@ -77,5 +77,21 @@ jobs:
             sleep 1
           done
           cat /tmp/bps-gdm.log
+          kill "$PID" || true
+          exit 1
+      - name: Circular phylogeny page HTTP health
+        env:
+          MPLBACKEND: Agg
+        run: |
+          python -m streamlit run pages/3_Circular_Phylogeny.py --server.headless=true --server.port=8513 > /tmp/bps-circular.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8513/_stcore/health; then
+              kill "$PID" || true
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/bps-circular.log
           kill "$PID" || true
           exit 1
