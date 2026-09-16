@@ -8,14 +8,20 @@ from modules.gdm_circular import circular_phylogeny_figure
 from modules.gdm_clade_validation import clade_sequence_concordance
 from modules.gdm_common import parse_fasta
 from modules.gdm_phylogeny import build_phylogeny
-from modules.gdm_plot import fig_bytes
+from modules.gdm_plot import (
+    architecture,
+    combined,
+    fig_bytes,
+    gene_structure,
+    missing_structure_figure,
+)
 from modules.gdm_style import STYLE_PRESETS, style_from_preset
 
 
 st.set_page_config(page_title='Circular Phylogeny | BioProtein Studio', page_icon='🌳', layout='wide')
 st.title('🌳 Circular Phylogeny & Sequence-Supported Clade View')
 st.caption(
-    'Build a circular tree directly from protein FASTA or re-visualize a validated Newick tree. '
+    'Build a circular tree directly from protein FASTA or reuse the full GDM analysis. '
     'Automatic clades can be cross-checked against independent unsupervised sequence-distance clustering.'
 )
 
@@ -31,6 +37,11 @@ st.info(
     'The optional ML concordance is an independent unsupervised k-medoids check of MAFFT sequence distances. '
     'It can strengthen or challenge an automatic topology partition, but it is not a substitute for '
     'reference-gene, functional, taxonomic, or experimental validation of biological subgroups.'
+)
+
+st.caption(
+    'Domains and motifs can be discovered from protein sequences. Exact exon–intron gene structure cannot be '
+    'derived from protein sequence alone; it requires CDS/genomic sequence, annotation, or a resolvable reference genome.'
 )
 
 source_options = []
@@ -102,6 +113,15 @@ elif source == 'Protein FASTA → automatic tree':
         if warning:
             st.warning(warning)
         st.success(f'Automatic tree ready: {method_label or "phylogeny inferred"}.')
+        st.info(
+            'This quick route builds the phylogeny and sequence-cluster evidence only. '
+            'Use the full GDM page for NCBI CDD domains, MEME motifs and validated gene structure in the same family.'
+        )
+        st.page_link(
+            'pages/2_Gene_Structure_Domain_Motif.py',
+            label='🧬 Open full Gene Structure + Domains + Motifs analysis',
+            icon='🧬',
+        )
 
 else:
     c1, c2 = st.columns(2)
@@ -147,7 +167,7 @@ with a:
     group_choice = st.selectbox(
         'Automatic clade groups',
         ['Data-driven ML Auto'] + list(range(2, 13)),
-        help='Data-driven Auto tests several topology partitions and selects the one most concordant with the independent sequence-distance clustering when an alignment is available.'
+        help='Data-driven Auto tests several monophyletic topology partitions and selects the one most concordant with independent sequence-distance clustering when an alignment is available.'
     )
     requested_groups = None if group_choice == 'Data-driven ML Auto' else int(group_choice)
 with b:
@@ -244,6 +264,56 @@ st.caption(
     'For publication subgroup claims, combine this evidence with branch support, curated references, '
     'domains/motifs, species context and other relevant biology.'
 )
+
+if source == 'Latest full GDM analysis' and r:
+    st.divider()
+    st.subheader('🧬 Full GDM evidence for the same protein family')
+    st.caption(
+        'The circular tree is only one view. The same completed run still contains gene-structure, '
+        'CDD-domain and MEME-motif evidence below when those analyses produced results.'
+    )
+    evidence_view = st.radio(
+        'Evidence view',
+        ['Gene Structure', 'Domains', 'Motifs', 'Integrated Tree + Structure + Motifs + Domains'],
+        horizontal=True,
+        key='circular_gdm_evidence_view',
+    )
+    gdm_order = session_order or order or []
+    gdm_fig = None
+    gdm_table = pd.DataFrame()
+    structures = r.get('gene_structures') if isinstance(r.get('gene_structures'), pd.DataFrame) else pd.DataFrame()
+    domains = r.get('domains') if isinstance(r.get('domains'), pd.DataFrame) else pd.DataFrame()
+    motifs = r.get('motifs') if isinstance(r.get('motifs'), pd.DataFrame) else pd.DataFrame()
+
+    if evidence_view == 'Gene Structure':
+        gdm_fig = gene_structure(structures, gdm_order, style) if not structures.empty else missing_structure_figure(gdm_order, style)
+        gdm_table = r.get('gene_qc') if isinstance(r.get('gene_qc'), pd.DataFrame) else pd.DataFrame()
+    elif evidence_view == 'Domains':
+        if domains.empty:
+            st.warning('No retained CDD domain results are available in this run.')
+        else:
+            gdm_fig = architecture(domains, gdm_order, 'domain', 'Conserved Domain Architecture', style=style)
+            gdm_table = r.get('domain_qc') if isinstance(r.get('domain_qc'), pd.DataFrame) else pd.DataFrame()
+    elif evidence_view == 'Motifs':
+        if motifs.empty:
+            st.warning('No MEME motif results are available in this run.')
+        else:
+            gdm_fig = architecture(motifs, gdm_order, 'motif', 'Conserved Motif Architecture', style=style)
+            gdm_table = r.get('motif_qc') if isinstance(r.get('motif_qc'), pd.DataFrame) else pd.DataFrame()
+    else:
+        gdm_fig = combined(tree_text, structures, domains, motifs, gdm_order, style)
+
+    if gdm_fig is not None:
+        st.pyplot(gdm_fig, width='stretch')
+        if not gdm_table.empty:
+            st.dataframe(gdm_table, width='stretch', hide_index=True)
+        plt.close(gdm_fig)
+
+    st.page_link(
+        'pages/2_Gene_Structure_Domain_Motif.py',
+        label='🧬 Open full analysis controls / rerun CDD, MEME or gene structure',
+        icon='🧬',
+    )
 
 st.subheader('Publication export')
 fmt = st.selectbox('Figure format', ['SVG', 'PDF', 'PNG', 'TIFF'], index=0)
